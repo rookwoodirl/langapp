@@ -16,6 +16,15 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/dbcheck', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message, code: err.code });
+  }
+});
+
 app.use('/articles', articlesRouter);
 
 async function start() {
