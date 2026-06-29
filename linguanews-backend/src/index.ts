@@ -27,13 +27,33 @@ app.get('/dbcheck', async (_req, res) => {
 
 app.use('/articles', articlesRouter);
 
+async function migrate() {
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS articles (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id         TEXT        NOT NULL,
+      url             TEXT,
+      title           TEXT,
+      source_language TEXT        NOT NULL DEFAULT 'en',
+      target_language TEXT        NOT NULL DEFAULT 'es',
+      translated_text TEXT        NOT NULL,
+      vocab           JSONB       NOT NULL DEFAULT '[]',
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS articles_user_id_idx ON articles (user_id, created_at DESC)
+  `);
+  console.log('Migrations complete');
+}
+
 async function start() {
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
   try {
-    await pool.query('SELECT 1');
-    console.log('Database connected');
+    await migrate();
   } catch (err) {
-    console.error('Database connection warning:', err);
+    console.error('Migration warning:', err);
   }
 }
 
