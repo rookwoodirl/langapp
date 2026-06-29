@@ -35,7 +35,7 @@ router.get('/', async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, url, title, source_language, target_language, created_at
+      `SELECT id, url, title, source_language, target_language, translated_text, vocab, created_at
        FROM articles
        WHERE user_id = $1
        ORDER BY created_at DESC
@@ -65,6 +65,19 @@ router.get('/:id', async (req: Request, res: Response) => {
     return res.json(result.rows[0]);
   } catch (err) {
     console.error('GET /articles/:id error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Delete all articles for a user
+router.delete('/', async (req: Request, res: Response) => {
+  const { user_id } = req.query;
+  if (!user_id) return res.status(400).json({ error: 'user_id query param is required' });
+  try {
+    await pool.query(`DELETE FROM articles WHERE user_id = $1`, [user_id]);
+    return res.status(204).send();
+  } catch (err) {
+    console.error('DELETE /articles error:', err);
     return res.status(500).json({ error: 'Database error' });
   }
 });

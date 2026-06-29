@@ -1,11 +1,9 @@
 import { create } from 'zustand';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Article, UserSettings } from '../types';
 import { scrapeArticle } from '../services/scraper';
 import { translateArticle } from '../services/translator';
 import { lookupWordDefinition } from '../services/vocab';
-
-const SAVED_ARTICLES_KEY = '@linguanews/saved_articles';
+import { apiSaveArticle, apiLoadArticles, apiDeleteArticle, apiClearArticles } from '../services/api';
 
 interface ArticleStore {
   currentArticle: Article | null;
@@ -106,18 +104,18 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
     const already = savedArticles.find((a) => a.id === currentArticle.id);
     if (already) return;
 
-    const updated = [currentArticle, ...savedArticles];
-    set({ savedArticles: updated });
-    await AsyncStorage.setItem(SAVED_ARTICLES_KEY, JSON.stringify(updated));
+    const backendId = await apiSaveArticle(currentArticle);
+    const saved = { ...currentArticle, id: backendId };
+    set({ currentArticle: saved, savedArticles: [saved, ...savedArticles] });
   },
 
   loadSavedArticles: async () => {
-    const raw = await AsyncStorage.getItem(SAVED_ARTICLES_KEY);
-    if (raw) set({ savedArticles: JSON.parse(raw) });
+    const articles = await apiLoadArticles();
+    set({ savedArticles: articles });
   },
 
   clearSavedArticles: async () => {
-    await AsyncStorage.removeItem(SAVED_ARTICLES_KEY);
+    await apiClearArticles();
     set({ savedArticles: [] });
   },
 
