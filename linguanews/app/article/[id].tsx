@@ -12,9 +12,12 @@ const SETTINGS_KEY = '@linguanews/settings';
 
 export default function ArticleScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { currentArticle, lookupWord } = useArticleStore();
+  const { currentArticle, savedArticles, lookupWord, saveArticle } = useArticleStore();
 
   const article = currentArticle?.id === id ? currentArticle : null;
+
+  const [saving, setSaving] = useState(false);
+  const isSaved = savedArticles.some((a) => a.id === id);
 
   const [popupVisible, setPopupVisible] = useState(false);
   const [popupWord, setPopupWord] = useState('');
@@ -66,9 +69,23 @@ export default function ArticleScreen() {
         <Text style={styles.langText}>
           {fromName} → {toName}
         </Text>
-        {/* TODO: share/export */}
-        <TouchableOpacity disabled style={styles.shareButton}>
-          <Text style={styles.shareText}>Share</Text>
+        <TouchableOpacity
+          style={[styles.saveButton, isSaved && styles.saveButtonDone]}
+          disabled={isSaved || saving}
+          onPress={async () => {
+            setSaving(true);
+            try {
+              await saveArticle();
+            } catch (err) {
+              Alert.alert('Save failed', err instanceof Error ? err.message : String(err));
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          <Text style={[styles.saveText, isSaved && styles.saveTextDone]}>
+            {isSaved ? '✓ Saved' : saving ? 'Saving…' : 'Save'}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -105,8 +122,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#f9f9f9',
   },
   langText: { fontSize: 14, color: '#555' },
-  shareButton: { opacity: 0.4 },
-  shareText: { fontSize: 14, color: '#4A90D9' },
+  saveButton: {
+    backgroundColor: '#4A90D9',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  saveButtonDone: { backgroundColor: '#e8f5e9' },
+  saveText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  saveTextDone: { color: '#2e7d32' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
   errorText: { fontSize: 16, color: '#555' },
   link: { fontSize: 15, color: '#4A90D9' },
