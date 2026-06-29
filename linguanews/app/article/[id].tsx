@@ -9,6 +9,7 @@ import VocabPopup from '../../components/VocabPopup';
 import AudioPlayer from '../../components/AudioPlayer';
 import { getLanguageName } from '../../constants/languages';
 import { getVerbConjugation } from '../../services/vocab';
+import { calcCost, formatCost, formatTokens } from '../../utils/cost';
 
 const SETTINGS_KEY = '@linguanews/settings';
 
@@ -68,6 +69,7 @@ export default function ArticleScreen() {
   }
 
   async function handleAddToVocab() {
+    if (!article) return;
     const raw = await AsyncStorage.getItem(SETTINGS_KEY);
     const settings = raw ? JSON.parse(raw) : {};
     const apiKey = settings.apiKey || process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
@@ -89,6 +91,8 @@ export default function ArticleScreen() {
 
   const fromName = getLanguageName(article.sourceLanguage);
   const toName = getLanguageName(article.targetLanguage);
+  const cost = calcCost(article.inputTokens ?? 0, article.outputTokens ?? 0);
+  const totalTokens = (article.inputTokens ?? 0) + (article.outputTokens ?? 0);
 
   return (
     <View style={styles.container}>
@@ -115,6 +119,14 @@ export default function ArticleScreen() {
           </Text>
         </TouchableOpacity>
       </View>
+
+      {totalTokens > 0 && (
+        <View style={styles.costBar}>
+          <Text style={styles.costText}>
+            {formatTokens(totalTokens)} tokens · {formatCost(cost)}
+          </Text>
+        </View>
+      )}
 
       <ArticleText
         text={article.translatedText}
@@ -160,6 +172,16 @@ const styles = StyleSheet.create({
   saveButtonDone: { backgroundColor: '#e8f5e9' },
   saveText: { fontSize: 14, fontWeight: '700', color: '#fff' },
   saveTextDone: { color: '#2e7d32' },
+  costBar: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+    backgroundColor: '#f9f9f9',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#eee',
+  },
+  costText: { fontSize: 12, color: '#aaa' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
   errorText: { fontSize: 16, color: '#555' },
   link: { fontSize: 15, color: '#4A90D9' },

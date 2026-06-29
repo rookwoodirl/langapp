@@ -15,6 +15,8 @@ export interface Article {
   translatedText: string;
   vocabList: VocabWord[];
   createdAt: number;
+  inputTokens: number;
+  outputTokens: number;
 }
 
 export interface UserSettings {

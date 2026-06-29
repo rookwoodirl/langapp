@@ -22,6 +22,7 @@ import { UserSettings, Article, UserVocabWord } from '../types';
 import { DEFAULT_SOURCE_LANGUAGE, DEFAULT_TARGET_LANGUAGE } from '../constants/languages';
 import { useArticleStore } from '../store/articleStore';
 import { useVocabStore } from '../store/vocabStore';
+import { calcCost, formatCost, formatTokens } from '../utils/cost';
 
 const SETTINGS_KEY = '@linguanews/settings';
 
@@ -167,12 +168,35 @@ export default function HomeScreen() {
   );
 
   // ── Articles page ───────────────────────────────────────────────────────────
+  const totalArticleTokens = savedArticles.reduce((s, a) => s + (a.inputTokens ?? 0) + (a.outputTokens ?? 0), 0);
+  const totalArticleCost = savedArticles.reduce((s, a) => s + calcCost(a.inputTokens ?? 0, a.outputTokens ?? 0), 0);
+
   const articlesPage = (
     <FlatList
       style={{ width }}
       contentContainerStyle={savedArticles.length === 0 ? styles.emptyContainer : styles.listContent}
       data={savedArticles}
       keyExtractor={(a) => a.id}
+      ListHeaderComponent={
+        savedArticles.length > 0 ? (
+          <View style={styles.statsBanner}>
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{savedArticles.length}</Text>
+              <Text style={styles.statLabel}>articles</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{formatTokens(totalArticleTokens)}</Text>
+              <Text style={styles.statLabel}>tokens</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{formatCost(totalArticleCost)}</Text>
+              <Text style={styles.statLabel}>total cost</Text>
+            </View>
+          </View>
+        ) : null
+      }
       ListEmptyComponent={
         <View style={styles.emptyState}>
           <Text style={styles.emptyIcon}>📰</Text>
@@ -180,20 +204,29 @@ export default function HomeScreen() {
           <Text style={styles.emptySubtitle}>Translate an article and tap Save to keep it here.</Text>
         </View>
       }
-      renderItem={({ item }) => (
-        <TouchableOpacity style={styles.articleCard} onPress={() => handleArticleTap(item)} activeOpacity={0.8}>
-          <View style={styles.articleMeta}>
-            <Text style={styles.articleLang}>{item.sourceLanguage} → {item.targetLanguage}</Text>
-            <Text style={styles.articleDate}>{formatDate(item.createdAt)}</Text>
-          </View>
-          {item.sourceUrl ? (
-            <Text style={styles.articleUrl} numberOfLines={1}>{item.sourceUrl}</Text>
-          ) : null}
-          <Text style={styles.articlePreview} numberOfLines={3}>
-            {item.translatedText}
-          </Text>
-        </TouchableOpacity>
-      )}
+      renderItem={({ item }) => {
+        const articleCost = calcCost(item.inputTokens ?? 0, item.outputTokens ?? 0);
+        const articleTokens = (item.inputTokens ?? 0) + (item.outputTokens ?? 0);
+        return (
+          <TouchableOpacity style={styles.articleCard} onPress={() => handleArticleTap(item)} activeOpacity={0.8}>
+            <View style={styles.articleMeta}>
+              <Text style={styles.articleLang}>{item.sourceLanguage} → {item.targetLanguage}</Text>
+              <Text style={styles.articleDate}>{formatDate(item.createdAt)}</Text>
+            </View>
+            {item.sourceUrl ? (
+              <Text style={styles.articleUrl} numberOfLines={1}>{item.sourceUrl}</Text>
+            ) : null}
+            <Text style={styles.articlePreview} numberOfLines={3}>
+              {item.translatedText}
+            </Text>
+            {articleTokens > 0 && (
+              <Text style={styles.articleCost}>
+                {formatTokens(articleTokens)} tokens · {formatCost(articleCost)}
+              </Text>
+            )}
+          </TouchableOpacity>
+        );
+      }}
     />
   );
 
@@ -388,6 +421,25 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 18, fontWeight: '700', color: '#333' },
   emptySubtitle: { fontSize: 14, color: '#888', textAlign: 'center', lineHeight: 20 },
 
+  statsBanner: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+    justifyContent: 'space-around',
+    alignItems: 'center',
+  },
+  statItem: { alignItems: 'center', flex: 1 },
+  statValue: { fontSize: 18, fontWeight: '800', color: '#111' },
+  statLabel: { fontSize: 11, color: '#888', marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
+  statDivider: { width: 1, height: 32, backgroundColor: '#eee' },
+
   articleCard: {
     backgroundColor: '#fff',
     borderRadius: 14,
@@ -404,6 +456,7 @@ const styles = StyleSheet.create({
   articleDate: { fontSize: 12, color: '#aaa' },
   articleUrl: { fontSize: 12, color: '#999', marginBottom: 6 },
   articlePreview: { fontSize: 14, color: '#444', lineHeight: 20 },
+  articleCost: { fontSize: 11, color: '#aaa', marginTop: 6 },
 
   // Vocab page
   vocabCard: {

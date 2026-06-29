@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { pool } from './db';
 import articlesRouter from './routes/articles';
 import vocabRouter from './routes/vocab';
+import scrapeRouter from './routes/scrape';
 
 dotenv.config();
 
@@ -28,6 +29,7 @@ app.get('/dbcheck', async (_req, res) => {
 
 app.use('/articles', articlesRouter);
 app.use('/vocab', vocabRouter);
+app.use('/scrape', scrapeRouter);
 
 async function migrate() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`);
@@ -47,6 +49,10 @@ async function migrate() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS articles_user_id_idx ON articles (user_id, created_at DESC)
   `);
+
+  // Add token columns to existing tables (no-op if already present)
+  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS input_tokens  INTEGER NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS output_tokens INTEGER NOT NULL DEFAULT 0`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vocab_words (

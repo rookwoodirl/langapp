@@ -8,14 +8,18 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts"
   },
   "dependencies": {
+    "@mozilla/readability": "^0.6.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.0",
     "express": "^4.19.0",
+    "jsdom": "^26.1.0",
     "pg": "^8.11.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
+    "@types/jsdom": "^28.0.3",
+    "@types/mozilla__readability": "^0.4.2",
     "@types/pg": "^8.11.0",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.4.0"

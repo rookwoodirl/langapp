@@ -30,6 +30,8 @@ function rowToArticle(row: Record<string, unknown>): Article {
     translatedText: (row.translated_text as string) ?? '',
     vocabList: Array.isArray(row.vocab) ? row.vocab : [],
     createdAt: new Date(row.created_at as string).getTime(),
+    inputTokens: (row.input_tokens as number) ?? 0,
+    outputTokens: (row.output_tokens as number) ?? 0,
   };
 }
 
@@ -46,6 +48,8 @@ export async function apiSaveArticle(article: Article): Promise<string> {
       target_language: article.targetLanguage,
       translated_text: article.translatedText,
       vocab: article.vocabList,
+      input_tokens: article.inputTokens ?? 0,
+      output_tokens: article.outputTokens ?? 0,
     }),
   });
   if (!res.ok) throw new Error('Failed to save article to server');

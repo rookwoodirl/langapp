@@ -67,6 +67,8 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
         translatedText: result.translation,
         vocabList: result.vocab,
         createdAt: Date.now(),
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
       };
 
       set({ currentArticle: article, isLoading: false, loadingStep: 'Done' });
