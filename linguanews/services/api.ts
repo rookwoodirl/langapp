@@ -20,6 +20,17 @@ export async function getUserId(): Promise<string> {
   return id;
 }
 
+// Safely parse JSON — if the server returns an HTML error page (gateway
+// timeout, cold-start, etc.) this gives a clear message instead of
+// "unexpected token <".
+async function parseJson(res: Response): Promise<unknown> {
+  const ct = res.headers.get('content-type') ?? '';
+  if (!ct.includes('application/json')) {
+    throw new Error(`Server error (HTTP ${res.status}). Try again in a moment.`);
+  }
+  return res.json();
+}
+
 function rowToArticle(row: Record<string, unknown>): Article {
   return {
     id: row.id as string,
@@ -52,17 +63,17 @@ export async function apiSaveArticle(article: Article): Promise<string> {
       output_tokens: article.outputTokens ?? 0,
     }),
   });
-  if (!res.ok) throw new Error('Failed to save article to server');
-  const data = await res.json();
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Failed to save article');
   return data.id as string;
 }
 
 export async function apiLoadArticles(): Promise<Article[]> {
   const userId = await getUserId();
   const res = await fetch(`${BACKEND_URL}/articles?user_id=${encodeURIComponent(userId)}`);
-  if (!res.ok) throw new Error('Failed to load articles from server');
-  const rows = await res.json();
-  return (rows as Record<string, unknown>[]).map(rowToArticle);
+  const data = await parseJson(res);
+  if (!res.ok) throw new Error('Failed to load articles');
+  return (data as Record<string, unknown>[]).map(rowToArticle);
 }
 
 export async function apiDeleteArticle(id: string): Promise<void> {
@@ -112,15 +123,18 @@ export async function apiAddVocabWord(params: {
       conjugation: params.conjugation ?? null,
     }),
   });
-  if (!res.ok) throw new Error('Failed to save vocab word');
+  if (!res.ok) {
+    const data = await parseJson(res).catch(() => ({})) as Record<string, unknown>;
+    throw new Error((data.error as string) ?? 'Failed to save vocab word');
+  }
 }
 
 export async function apiLoadVocab(): Promise<UserVocabWord[]> {
   const userId = await getUserId();
   const res = await fetch(`${BACKEND_URL}/vocab?user_id=${encodeURIComponent(userId)}`);
+  const data = await parseJson(res);
   if (!res.ok) throw new Error('Failed to load vocab');
-  const rows = await res.json();
-  return (rows as Record<string, unknown>[]).map(rowToVocabWord);
+  return (data as Record<string, unknown>[]).map(rowToVocabWord);
 }
 
 export async function apiRemoveVocabWord(userVocabId: string): Promise<void> {
