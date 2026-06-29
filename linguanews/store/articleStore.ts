@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { Article, UserSettings } from '../types';
 import { scrapeArticle } from '../services/scraper';
 import { translateArticle } from '../services/translator';
-import { lookupWordDefinition } from '../services/vocab';
+import { lookupWordDefinition, LookupResult } from '../services/vocab';
 import { apiSaveArticle, apiLoadArticles, apiDeleteArticle, apiClearArticles } from '../services/api';
 
 interface ArticleStore {
@@ -12,10 +12,12 @@ interface ArticleStore {
   error: string | null;
   savedArticles: Article[];
   ttsPlaying: boolean;
-  wordLookupCache: Record<string, string>;
+  wordLookupCache: Record<string, { definition: string; partOfSpeech?: string }>;
+  vocabInputTokens: number;
+  vocabOutputTokens: number;
 
   loadArticle: (input: string, isUrl: boolean, settings: UserSettings) => Promise<void>;
-  lookupWord: (word: string, settings: UserSettings) => Promise<string>;
+  lookupWord: (word: string, settings: UserSettings) => Promise<{ definition: string; partOfSpeech?: string }>;
   toggleTTS: () => void;
   saveArticle: () => Promise<void>;
   loadSavedArticles: () => Promise<void>;
@@ -32,9 +34,11 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
   savedArticles: [],
   ttsPlaying: false,
   wordLookupCache: {},
+  vocabInputTokens: 0,
+  vocabOutputTokens: 0,
 
   loadArticle: async (input, isUrl, settings) => {
-    set({ isLoading: true, error: null });
+    set({ isLoading: true, error: null, wordLookupCache: {}, vocabInputTokens: 0, vocabOutputTokens: 0 });
 
     try {
       let originalText: string;
@@ -86,15 +90,22 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
     if (cache[word]) return cache[word];
 
     const apiKey = settings.apiKey || process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
-    const definition = await lookupWordDefinition(
+    const articleText = get().currentArticle?.translatedText;
+    const result: LookupResult = await lookupWordDefinition(
       word,
       settings.targetLanguage,
       settings.sourceLanguage,
-      apiKey
+      apiKey,
+      articleText
     );
 
-    set({ wordLookupCache: { ...cache, [word]: definition } });
-    return definition;
+    const { vocabInputTokens, vocabOutputTokens } = get();
+    set({
+      wordLookupCache: { ...cache, [word]: { definition: result.definition, partOfSpeech: result.partOfSpeech } },
+      vocabInputTokens: vocabInputTokens + result.inputTokens,
+      vocabOutputTokens: vocabOutputTokens + result.outputTokens,
+    });
+    return { definition: result.definition, partOfSpeech: result.partOfSpeech };
   },
 
   toggleTTS: () => set((state) => ({ ttsPlaying: !state.ttsPlaying })),

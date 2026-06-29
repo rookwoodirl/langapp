@@ -15,7 +15,7 @@ const SETTINGS_KEY = '@linguanews/settings';
 
 export default function ArticleScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { currentArticle, savedArticles, lookupWord, saveArticle } = useArticleStore();
+  const { currentArticle, savedArticles, lookupWord, saveArticle, vocabInputTokens, vocabOutputTokens } = useArticleStore();
   const { addWord, words: vocabWords } = useVocabStore();
 
   const article = currentArticle?.id === id ? currentArticle : null;
@@ -57,8 +57,9 @@ export default function ArticleScreen() {
       try {
         const raw = await AsyncStorage.getItem(SETTINGS_KEY);
         const settings = raw ? JSON.parse(raw) : {};
-        const def = await lookupWord(word, settings);
-        setPopupDefinition(def);
+        const result = await lookupWord(word, settings);
+        setPopupDefinition(result.definition);
+        if (result.partOfSpeech) setPopupPos(result.partOfSpeech);
       } catch (err) {
         setPopupDefinition('Could not load definition.');
         Alert.alert('Lookup failed', err instanceof Error ? err.message : String(err));
@@ -93,6 +94,8 @@ export default function ArticleScreen() {
   const toName = getLanguageName(article.targetLanguage);
   const cost = calcCost(article.inputTokens ?? 0, article.outputTokens ?? 0);
   const totalTokens = (article.inputTokens ?? 0) + (article.outputTokens ?? 0);
+  const vocabCost = calcCost(vocabInputTokens, vocabOutputTokens);
+  const vocabTotalTokens = vocabInputTokens + vocabOutputTokens;
 
   return (
     <View style={styles.container}>
@@ -123,7 +126,10 @@ export default function ArticleScreen() {
       {totalTokens > 0 && (
         <View style={styles.costBar}>
           <Text style={styles.costText}>
-            {formatTokens(totalTokens)} tokens · {formatCost(cost)}
+            Translation: {formatTokens(totalTokens)} tokens · {formatCost(cost)}
+            {vocabTotalTokens > 0
+              ? `  |  Lookups: ${formatTokens(vocabTotalTokens)} tokens · ${formatCost(vocabCost)}`
+              : ''}
           </Text>
         </View>
       )}

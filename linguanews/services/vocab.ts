@@ -1,30 +1,73 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { VerbConjugation } from '../types';
 
+export interface LookupResult {
+  definition: string;
+  partOfSpeech?: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+function extractContext(text: string, word: string, radius = 400): string {
+  const idx = text.toLowerCase().indexOf(word.toLowerCase());
+  if (idx === -1) return '';
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(text.length, idx + word.length + radius);
+  return (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
+}
+
 export async function lookupWordDefinition(
   word: string,
   targetLanguage: string,
   sourceLanguage: string,
-  apiKey: string
-): Promise<string> {
+  apiKey: string,
+  articleContext?: string
+): Promise<LookupResult> {
   if (!apiKey) throw new Error('No API key set.');
 
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
 
+  const contextSnippet = articleContext ? extractContext(articleContext, word) : '';
+
+  const contextLine = contextSnippet
+    ? `The word appears in this passage: "${contextSnippet}"\n\n`
+    : '';
+
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 256,
-    messages: [
-      {
-        role: 'user',
-        content: `Define the word "${word}" in ${targetLanguage} for a language learner. Reply in ${sourceLanguage} in 1–2 sentences, and include part of speech.`,
-      },
-    ],
+    system:
+      `You are a language translation assistant. A ${sourceLanguage} speaker is learning ${targetLanguage}. ` +
+      `${contextLine}` +
+      `Given a ${targetLanguage} word, return a JSON object with exactly two keys:\n` +
+      `- "definition": a clear 1–2 sentence explanation in ${sourceLanguage}\n` +
+      `- "partOfSpeech": the grammatical category (noun, verb, adjective, etc.)\n` +
+      `Respond with raw JSON only. No markdown, no code fences, no preamble.`,
+    messages: [{ role: 'user', content: `${targetLanguage} word: "${word}"` }],
   });
 
   const content = message.content[0];
   if (content.type !== 'text') throw new Error('Unexpected response type');
-  return content.text;
+
+  let definition = content.text;
+  let partOfSpeech: string | undefined;
+  try {
+    const raw = content.text.trim();
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as { definition: string; partOfSpeech?: string };
+    definition = parsed.definition;
+    partOfSpeech = parsed.partOfSpeech;
+  } catch {
+    // fall back to raw text if JSON parse fails
+  }
+
+  return {
+    definition,
+    partOfSpeech,
+    inputTokens: message.usage.input_tokens,
+    outputTokens: message.usage.output_tokens,
+  };
 }
 
 export async function getVerbConjugation(
