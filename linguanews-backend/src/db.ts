@@ -3,7 +3,10 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const connectionString = process.env.POSTGRES_CONNSTRING ?? '';
+const isInternal = connectionString.includes('.railway.internal');
+
 export const pool = new Pool({
-  connectionString: process.env.POSTGRES_CONNSTRING,
-  ssl: { rejectUnauthorized: false },
+  connectionString,
+  ssl: isInternal ? false : { rejectUnauthorized: false },
 });
