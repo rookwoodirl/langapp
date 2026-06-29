@@ -6,7 +6,7 @@ export default function RootLayout() {
     <>
       <StatusBar style="auto" />
       <Stack>
-        <Stack.Screen name="index" options={{ title: 'LinguaNews' }} />
+        <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="article/[id]" options={{ title: 'Article' }} />
         <Stack.Screen name="settings" options={{ title: 'Settings', presentation: 'modal' }} />
       </Stack>

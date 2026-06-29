@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -15,7 +15,9 @@ interface Props {
   definition: string | null;
   partOfSpeech?: string;
   isLoading?: boolean;
+  isAdded?: boolean;
   onClose: () => void;
+  onAddToVocab?: () => Promise<void>;
 }
 
 export default function VocabPopup({
@@ -24,8 +26,22 @@ export default function VocabPopup({
   definition,
   partOfSpeech,
   isLoading,
+  isAdded,
   onClose,
+  onAddToVocab,
 }: Props) {
+  const [adding, setAdding] = useState(false);
+
+  async function handleAdd() {
+    if (!onAddToVocab || adding || isAdded) return;
+    setAdding(true);
+    try {
+      await onAddToVocab();
+    } finally {
+      setAdding(false);
+    }
+  }
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose} />
@@ -44,6 +60,21 @@ export default function VocabPopup({
         ) : (
           <Text style={styles.definition}>{definition ?? 'No definition available.'}</Text>
         )}
+
+        {onAddToVocab && (
+          <TouchableOpacity
+            style={[styles.addBtn, (isAdded || adding) && styles.addBtnDone]}
+            onPress={handleAdd}
+            disabled={isAdded || adding}
+            activeOpacity={0.75}
+          >
+            {adding ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <Text style={styles.addBtnText}>{isAdded ? '✓ In vocab' : 'Add to vocab'}</Text>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
     </Modal>
   );
@@ -59,9 +90,9 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingHorizontal: 20,
-    paddingBottom: 36,
+    paddingBottom: 40,
     paddingTop: 12,
-    minHeight: 160,
+    minHeight: 180,
   },
   handle: {
     width: 40,
@@ -91,4 +122,13 @@ const styles = StyleSheet.create({
   closeText: { fontSize: 18, color: '#999' },
   definition: { fontSize: 16, lineHeight: 24, color: '#333' },
   loader: { marginTop: 12 },
+  addBtn: {
+    marginTop: 20,
+    backgroundColor: '#4A90D9',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  addBtnDone: { backgroundColor: '#e8f5e9' },
+  addBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
 });

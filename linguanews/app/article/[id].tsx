@@ -1,18 +1,21 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useArticleStore } from '../../store/articleStore';
+import { useVocabStore } from '../../store/vocabStore';
 import ArticleText from '../../components/ArticleText';
 import VocabPopup from '../../components/VocabPopup';
 import AudioPlayer from '../../components/AudioPlayer';
 import { getLanguageName } from '../../constants/languages';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getVerbConjugation } from '../../services/vocab';
 
 const SETTINGS_KEY = '@linguanews/settings';
 
 export default function ArticleScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { currentArticle, savedArticles, lookupWord, saveArticle } = useArticleStore();
+  const { addWord, words: vocabWords } = useVocabStore();
 
   const article = currentArticle?.id === id ? currentArticle : null;
 
@@ -24,6 +27,10 @@ export default function ArticleScreen() {
   const [popupDefinition, setPopupDefinition] = useState<string | null>(null);
   const [popupPos, setPopupPos] = useState<string | undefined>();
   const [popupLoading, setPopupLoading] = useState(false);
+
+  // Track which words the user has already added to vocab this session
+  const isWordInVocab = (word: string) =>
+    vocabWords.some((w) => w.word.toLowerCase() === word.toLowerCase());
 
   if (!article) {
     return (
@@ -58,6 +65,26 @@ export default function ArticleScreen() {
         setPopupLoading(false);
       }
     }
+  }
+
+  async function handleAddToVocab() {
+    const raw = await AsyncStorage.getItem(SETTINGS_KEY);
+    const settings = raw ? JSON.parse(raw) : {};
+    const apiKey = settings.apiKey || process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
+
+    let conjugation: { infinitive: string; present: string[] } | undefined;
+    const isVerb = popupPos?.toLowerCase().includes('verb');
+    if (isVerb && apiKey) {
+      conjugation = (await getVerbConjugation(popupWord, article.targetLanguage, apiKey)) ?? undefined;
+    }
+
+    await addWord({
+      word: popupWord,
+      language: article.targetLanguage,
+      definition: popupDefinition ?? '',
+      partOfSpeech: popupPos,
+      conjugation,
+    });
   }
 
   const fromName = getLanguageName(article.sourceLanguage);
@@ -103,7 +130,9 @@ export default function ArticleScreen() {
         definition={popupDefinition}
         partOfSpeech={popupPos}
         isLoading={popupLoading}
+        isAdded={isWordInVocab(popupWord)}
         onClose={() => setPopupVisible(false)}
+        onAddToVocab={handleAddToVocab}
       />
     </View>
   );

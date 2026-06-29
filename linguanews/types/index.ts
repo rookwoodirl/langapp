@@ -22,3 +22,19 @@ export interface UserSettings {
   targetLanguage: LanguageCode;
   apiKey: string;
 }
+
+export interface VerbConjugation {
+  infinitive: string;
+  present: string[];
+}
+
+export interface UserVocabWord {
+  id: string;
+  vocabWordId: string;
+  word: string;
+  language: string;
+  definition: string;
+  partOfSpeech?: string;
+  conjugation?: VerbConjugation;
+  addedAt: number;
+}

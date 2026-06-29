@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { pool } from './db';
 import articlesRouter from './routes/articles';
+import vocabRouter from './routes/vocab';
 
 dotenv.config();
 
@@ -26,6 +27,7 @@ app.get('/dbcheck', async (_req, res) => {
 });
 
 app.use('/articles', articlesRouter);
+app.use('/vocab', vocabRouter);
 
 async function migrate() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`);
@@ -45,6 +47,33 @@ async function migrate() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS articles_user_id_idx ON articles (user_id, created_at DESC)
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vocab_words (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      word            TEXT        NOT NULL,
+      language        TEXT        NOT NULL,
+      definition      TEXT        NOT NULL,
+      part_of_speech  TEXT,
+      conjugation     JSONB,
+      UNIQUE(word, language)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_vocab (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id         TEXT        NOT NULL,
+      vocab_word_id   UUID        NOT NULL REFERENCES vocab_words(id) ON DELETE CASCADE,
+      added_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(user_id, vocab_word_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS user_vocab_user_id_idx ON user_vocab (user_id, added_at DESC)
+  `);
+
   console.log('Migrations complete');
 }
 
