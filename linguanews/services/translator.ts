@@ -16,9 +16,23 @@ export function calcCost(inputTokens: number, outputTokens: number): number {
   return (inputTokens / 1_000_000) * INPUT_COST_PER_M + (outputTokens / 1_000_000) * OUTPUT_COST_PER_M;
 }
 
-function buildSystemPrompt(sourceLanguage: string, targetLanguage: string): string {
+const DIFFICULTY_INSTRUCTIONS: Record<string, string> = {
+  beginner:
+    'Write the translation using simple, everyday vocabulary and short sentences. ' +
+    'Avoid idioms and complex grammar. Prioritise clarity over nuance.',
+  intermediate:
+    'Write the translation at a standard reading level. ' +
+    'Preserve most of the original meaning and structure, but simplify unusually complex phrasing.',
+  advanced:
+    'Write the translation preserving the full sophistication of the original: ' +
+    'idiomatic expressions, nuanced vocabulary, and complex sentence structures.',
+};
+
+function buildSystemPrompt(sourceLanguage: string, targetLanguage: string, difficulty: string): string {
+  const difficultyNote = DIFFICULTY_INSTRUCTIONS[difficulty] ?? DIFFICULTY_INSTRUCTIONS.intermediate;
   return (
     `You are a language translation assistant. You will receive article text in ${sourceLanguage}.\n` +
+    `Reading difficulty: ${difficulty}. ${difficultyNote}\n\n` +
     `Return a JSON object with exactly two keys:\n` +
     `- "translation": the full article translated into ${targetLanguage}, preserving paragraph breaks with \\n\\n\n` +
     `- "vocab": an array of 10–20 key vocabulary objects, each with "word" (as it appears in the translation), ` +
@@ -61,12 +75,13 @@ export async function translateArticle(
   text: string,
   sourceLanguage: string,
   targetLanguage: string,
-  apiKey: string
+  apiKey: string,
+  difficulty = 'intermediate'
 ): Promise<TranslationResult> {
   if (!apiKey) throw new Error('No API key set. Add your Anthropic API key in Settings.');
 
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-  const systemPrompt = buildSystemPrompt(sourceLanguage, targetLanguage);
+  const systemPrompt = buildSystemPrompt(sourceLanguage, targetLanguage, difficulty);
 
   // Claude Sonnet 4.6 has a 200K token context window; 40K chars ≈ 10K words
   const truncated = text.length > 40000 ? text.slice(0, 40000) + '…' : text;

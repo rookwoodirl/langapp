@@ -18,8 +18,10 @@ import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useArticle } from '../hooks/useArticle';
 import LanguagePicker from '../components/LanguagePicker';
-import { UserSettings, Article, UserVocabWord } from '../types';
+import { UserSettings, Article, UserVocabWord, DifficultyLevel } from '../types';
 import { DEFAULT_SOURCE_LANGUAGE, DEFAULT_TARGET_LANGUAGE } from '../constants/languages';
+
+const DIFFICULTIES: DifficultyLevel[] = ['beginner', 'intermediate', 'advanced'];
 import { useArticleStore } from '../store/articleStore';
 import { useVocabStore } from '../store/vocabStore';
 import { calcCost, formatCost, formatTokens } from '../utils/cost';
@@ -39,6 +41,7 @@ export default function HomeScreen() {
     sourceLanguage: DEFAULT_SOURCE_LANGUAGE,
     targetLanguage: DEFAULT_TARGET_LANGUAGE,
     apiKey: '',
+    difficulty: 'intermediate',
   });
 
   const { fetchArticle, isLoading, loadingStep, error, currentArticle } = useArticle();
@@ -154,6 +157,24 @@ export default function HomeScreen() {
         </View>
       </View>
 
+      <View style={styles.difficultyCard}>
+        <Text style={styles.cardLabel}>Reading Level</Text>
+        <View style={styles.difficultyRow}>
+          {DIFFICULTIES.map((d) => (
+            <TouchableOpacity
+              key={d}
+              style={[styles.difficultyBtn, settings.difficulty === d && styles.difficultyBtnActive]}
+              onPress={() => updateSetting('difficulty', d)}
+              activeOpacity={0.75}
+            >
+              <Text style={[styles.difficultyText, settings.difficulty === d && styles.difficultyTextActive]}>
+                {d.charAt(0).toUpperCase() + d.slice(1)}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
       {isLoading ? (
         <View style={styles.loadingBox}>
           <ActivityIndicator color="#4A90D9" size="large" />
@@ -208,7 +229,26 @@ export default function HomeScreen() {
         const articleCost = calcCost(item.inputTokens ?? 0, item.outputTokens ?? 0);
         const articleTokens = (item.inputTokens ?? 0) + (item.outputTokens ?? 0);
         return (
-          <TouchableOpacity style={styles.articleCard} onPress={() => handleArticleTap(item)} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={styles.articleCard}
+            onPress={() => handleArticleTap(item)}
+            onLongPress={() => {
+              Alert.alert('Article', undefined, [
+                {
+                  text: 'Copy Link',
+                  onPress: () => {
+                    if (item.sourceUrl) {
+                      Clipboard.setStringAsync(item.sourceUrl);
+                    } else {
+                      Alert.alert('No link', 'This article has no source URL.');
+                    }
+                  },
+                },
+                { text: 'Cancel', style: 'cancel' },
+              ]);
+            }}
+            activeOpacity={0.8}
+          >
             <View style={styles.articleMeta}>
               <Text style={styles.articleLang}>{item.sourceLanguage} → {item.targetLanguage}</Text>
               <Text style={styles.articleDate}>{formatDate(item.createdAt)}</Text>
@@ -400,6 +440,39 @@ const styles = StyleSheet.create({
   langCol: { flex: 1 },
   arrow: { fontSize: 20, color: '#aaa', marginTop: 16 },
 
+  difficultyCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  difficultyRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  difficultyBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    backgroundColor: '#f0f2f5',
+  },
+  difficultyBtnActive: {
+    backgroundColor: '#4A90D9',
+  },
+  difficultyText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#666',
+  },
+  difficultyTextActive: {
+    color: '#fff',
+  },
   translateBtn: {
     backgroundColor: '#4A90D9',
     borderRadius: 14,

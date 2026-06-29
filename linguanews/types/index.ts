@@ -19,10 +19,13 @@ export interface Article {
   outputTokens: number;
 }
 
+export type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced';
+
 export interface UserSettings {
   sourceLanguage: LanguageCode;
   targetLanguage: LanguageCode;
   apiKey: string;
+  difficulty: DifficultyLevel;
 }
 
 export interface VerbConjugation {

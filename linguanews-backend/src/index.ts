@@ -50,9 +50,10 @@ async function migrate() {
     CREATE INDEX IF NOT EXISTS articles_user_id_idx ON articles (user_id, created_at DESC)
   `);
 
-  // Add token columns to existing tables (no-op if already present)
+  // Add columns to existing tables (no-op if already present)
   await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS input_tokens  INTEGER NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS output_tokens INTEGER NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS original_text TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vocab_words (

@@ -1,5 +1,15 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Alert,
+  ScrollView,
+  useWindowDimensions,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
+} from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useArticleStore } from '../../store/articleStore';
@@ -14,6 +24,7 @@ import { calcCost, formatCost, formatTokens } from '../../utils/cost';
 const SETTINGS_KEY = '@linguanews/settings';
 
 export default function ArticleScreen() {
+  const { width } = useWindowDimensions();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { currentArticle, savedArticles, lookupWord, saveArticle, vocabInputTokens, vocabOutputTokens } = useArticleStore();
   const { addWord, words: vocabWords } = useVocabStore();
@@ -28,6 +39,19 @@ export default function ArticleScreen() {
   const [popupDefinition, setPopupDefinition] = useState<string | null>(null);
   const [popupPos, setPopupPos] = useState<string | undefined>();
   const [popupLoading, setPopupLoading] = useState(false);
+
+  const [activeView, setActiveView] = useState(0);
+  const pagerRef = useRef<ScrollView>(null);
+
+  function scrollToView(index: number) {
+    pagerRef.current?.scrollTo({ x: index * width, animated: true });
+    setActiveView(index);
+  }
+
+  function handlePagerScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
+    const page = Math.round(e.nativeEvent.contentOffset.x / width);
+    if (page !== activeView) setActiveView(page);
+  }
 
   // Track which words the user has already added to vocab this session
   const isWordInVocab = (word: string) =>
@@ -134,11 +158,49 @@ export default function ArticleScreen() {
         </View>
       )}
 
-      <ArticleText
-        text={article.translatedText}
-        vocabList={article.vocabList}
-        onWordTap={handleWordTap}
-      />
+      <View style={styles.viewToggle}>
+        {['Translation', 'Original'].map((label, i) => (
+          <TouchableOpacity
+            key={label}
+            style={[styles.viewToggleBtn, activeView === i && styles.viewToggleBtnActive]}
+            onPress={() => scrollToView(i)}
+            activeOpacity={0.75}
+          >
+            <Text style={[styles.viewToggleText, activeView === i && styles.viewToggleTextActive]}>
+              {label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <ScrollView
+        ref={pagerRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        scrollEventThrottle={16}
+        onMomentumScrollEnd={handlePagerScroll}
+        style={styles.pager}
+      >
+        <View style={{ width }}>
+          <ArticleText
+            text={article.translatedText}
+            vocabList={article.vocabList}
+            onWordTap={handleWordTap}
+          />
+        </View>
+        <View style={{ width }}>
+          <ScrollView contentContainerStyle={styles.originalContent}>
+            {article.originalText ? (
+              <Text style={styles.originalText}>{article.originalText}</Text>
+            ) : (
+              <Text style={styles.originalUnavailable}>
+                Original text is not available for saved articles.
+              </Text>
+            )}
+          </ScrollView>
+        </View>
+      </ScrollView>
 
       <AudioPlayer text={article.translatedText} language={article.targetLanguage} />
 
@@ -191,4 +253,34 @@ const styles = StyleSheet.create({
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
   errorText: { fontSize: 16, color: '#555' },
   link: { fontSize: 15, color: '#4A90D9' },
+
+  viewToggle: {
+    flexDirection: 'row',
+    marginHorizontal: 16,
+    marginVertical: 8,
+    backgroundColor: '#e8ecf0',
+    borderRadius: 10,
+    padding: 3,
+  },
+  viewToggleBtn: {
+    flex: 1,
+    paddingVertical: 7,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  viewToggleBtnActive: {
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
+  viewToggleText: { fontSize: 13, fontWeight: '600', color: '#888' },
+  viewToggleTextActive: { color: '#111' },
+
+  pager: { flex: 1 },
+  originalContent: { padding: 20, paddingBottom: 120 },
+  originalText: { fontSize: 17, lineHeight: 28, color: '#111' },
+  originalUnavailable: { fontSize: 15, color: '#aaa', textAlign: 'center', marginTop: 40 },
 });

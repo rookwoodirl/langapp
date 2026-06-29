@@ -59,7 +59,8 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
         originalText,
         settings.sourceLanguage,
         settings.targetLanguage,
-        apiKey
+        apiKey,
+        settings.difficulty ?? 'intermediate'
       );
 
       const article: Article = {
