@@ -14,7 +14,7 @@ export async function recordApiCost(params: {
 }): Promise<void> {
   try {
     const userId = await getUserId();
-    await fetch(`${BACKEND_URL}/api-costs`, {
+    const res = await fetch(`${BACKEND_URL}/api-costs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -27,7 +27,10 @@ export async function recordApiCost(params: {
         total_output_credits: params.totalOutputCredits,
       }),
     });
-  } catch {
-    // Non-blocking — cost recording failure should never crash the app
+    if (!res.ok) {
+      console.error(`recordApiCost: backend returned ${res.status} for source=${params.source}`);
+    }
+  } catch (err) {
+    console.error('recordApiCost: network error', err);
   }
 }
