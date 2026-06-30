@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,8 @@ import {
 } from 'react-native';
 import { VerbConjugation } from '../types';
 import ConjugationModal from './ConjugationModal';
+import { useColors } from '../hooks/useColors';
+import { ThemeColors } from '../constants/theme';
 
 interface Props {
   visible: boolean;
@@ -40,6 +42,8 @@ export default function VocabPopup({
 }: Props) {
   const [adding, setAdding] = useState(false);
   const [conjVisible, setConjVisible] = useState(false);
+  const colors = useColors();
+  const styles = useMemo(() => themedStyles(colors), [colors]);
 
   async function handleAdd() {
     if (!onAddToVocab || adding || isAdded) return;
@@ -70,7 +74,7 @@ export default function VocabPopup({
           </View>
 
           {isLoading ? (
-            <ActivityIndicator style={styles.loader} color="#4A90D9" />
+            <ActivityIndicator style={styles.loader} color={colors.accent} />
           ) : (
             <Text style={styles.definition}>{definition ?? 'No definition available.'}</Text>
           )}
@@ -89,7 +93,7 @@ export default function VocabPopup({
               activeOpacity={0.75}
             >
               {adding ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <ActivityIndicator color={colors.accentText} size="small" />
               ) : (
                 <Text style={styles.addBtnText}>{isAdded ? '✓ In vocab' : 'Add to vocab'}</Text>
               )}
@@ -110,10 +114,10 @@ export default function VocabPopup({
   );
 }
 
-const styles = StyleSheet.create({
+const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
   sheet: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingHorizontal: 20,
@@ -122,44 +126,44 @@ const styles = StyleSheet.create({
     minHeight: 180,
   },
   handle: {
-    width: 40, height: 4, borderRadius: 2, backgroundColor: '#ddd',
+    width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border,
     alignSelf: 'center', marginBottom: 16,
   },
   header: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 },
-  word: { fontSize: 22, fontWeight: '700', color: '#111', flex: 1 },
+  word: { fontSize: 22, fontWeight: '700', color: colors.text, flex: 1 },
   badges: { flexDirection: 'row', gap: 6, flexShrink: 1, flexWrap: 'wrap' },
   article: {
-    fontSize: 13, color: '#6b48a2', fontStyle: 'italic',
-    backgroundColor: '#f3eeff', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4,
+    fontSize: 13, color: colors.purple, fontStyle: 'italic',
+    backgroundColor: colors.purpleSoft, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4,
   },
   pos: {
-    fontSize: 13, color: '#888', fontStyle: 'italic',
-    backgroundColor: '#f5f5f5', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4,
+    fontSize: 13, color: colors.textFaint, fontStyle: 'italic',
+    backgroundColor: colors.surfaceAlt, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4,
   },
   gender: {
-    fontSize: 13, color: '#4A90D9', fontStyle: 'italic',
-    backgroundColor: '#eef4fd', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4,
+    fontSize: 13, color: colors.accent, fontStyle: 'italic',
+    backgroundColor: colors.accentSoft, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4,
   },
   closeButton: { padding: 4 },
-  closeText: { fontSize: 18, color: '#999' },
-  definition: { fontSize: 16, lineHeight: 24, color: '#333' },
+  closeText: { fontSize: 18, color: colors.textFaint },
+  definition: { fontSize: 16, lineHeight: 24, color: colors.textMuted },
   loader: { marginTop: 12 },
   conjBtn: {
     marginTop: 14,
     borderWidth: 1.5,
-    borderColor: '#4A90D9',
+    borderColor: colors.accent,
     borderRadius: 10,
     paddingVertical: 10,
     alignItems: 'center',
   },
-  conjBtnText: { fontSize: 14, fontWeight: '600', color: '#4A90D9' },
+  conjBtnText: { fontSize: 14, fontWeight: '600', color: colors.accent },
   addBtn: {
     marginTop: 12,
-    backgroundColor: '#4A90D9',
+    backgroundColor: colors.accent,
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
   },
-  addBtnDone: { backgroundColor: '#e8f5e9' },
-  addBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+  addBtnDone: { backgroundColor: colors.successSoft },
+  addBtnText: { fontSize: 15, fontWeight: '700', color: colors.accentText },
 });

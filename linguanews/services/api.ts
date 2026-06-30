@@ -107,14 +107,28 @@ export interface CostSummaryRow {
   totalCost: number;
 }
 
-export async function apiGetCostSummary(): Promise<Record<string, CostSummaryRow>> {
+export async function apiGetCostSummary(filters?: { language?: string; since?: Date }): Promise<Record<string, CostSummaryRow>> {
   try {
     const userId = await getUserId();
-    const res = await fetch(`${BACKEND_URL}/api-costs/summary?user_id=${encodeURIComponent(userId)}`);
+    const params = new URLSearchParams({ user_id: userId });
+    if (filters?.language) params.set('language', filters.language);
+    if (filters?.since) params.set('since', filters.since.toISOString());
+    const res = await fetch(`${BACKEND_URL}/api-costs/summary?${params.toString()}`);
     if (!res.ok) return {};
     return (await parseJson(res)) as Record<string, CostSummaryRow>;
   } catch {
     return {};
+  }
+}
+
+export async function apiGetCostLanguages(): Promise<string[]> {
+  try {
+    const userId = await getUserId();
+    const res = await fetch(`${BACKEND_URL}/api-costs/languages?user_id=${encodeURIComponent(userId)}`);
+    if (!res.ok) return [];
+    return (await parseJson(res)) as string[];
+  } catch {
+    return [];
   }
 }
 
@@ -176,6 +190,32 @@ export async function apiLoadVocab(): Promise<UserVocabWord[]> {
   const data = await parseJson(res);
   if (!res.ok) throw new Error('Failed to load vocab');
   return (data as Record<string, unknown>[]).map(rowToVocabWord);
+}
+
+export async function apiUpdateVocabWord(vocabWordId: string, params: {
+  word?: string;
+  definition?: string;
+  partOfSpeech?: string;
+  gender?: string;
+  article?: string;
+}): Promise<void> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/vocab/${vocabWordId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: userId,
+      word: params.word ?? null,
+      definition: params.definition ?? null,
+      part_of_speech: params.partOfSpeech ?? null,
+      gender: params.gender ?? null,
+      article: params.article ?? null,
+    }),
+  });
+  if (!res.ok) {
+    const data = await parseJson(res).catch(() => ({})) as Record<string, unknown>;
+    throw new Error((data.error as string) ?? 'Failed to update vocab word');
+  }
 }
 
 export async function apiRemoveVocabWord(userVocabId: string): Promise<void> {

@@ -19,12 +19,16 @@ import { getLanguageName } from '../../constants/languages';
 import { getVerbConjugation } from '../../services/vocab';
 import { calcCost, formatCost, formatTokens } from '../../utils/cost';
 import { SentencePair, VerbConjugation } from '../../types';
+import { useColors } from '../../hooks/useColors';
+import { ThemeColors } from '../../constants/theme';
 
 const SETTINGS_KEY = '@linguanews/settings';
 
 export default function ArticleScreen() {
   const { width } = useWindowDimensions();
   const cardWidth = width - 32;
+  const colors = useColors();
+  const styles = useMemo(() => themedStyles(colors), [colors]);
 
   const { id } = useLocalSearchParams<{ id: string }>();
   const { currentArticle, savedArticles, lookupWord, saveArticle, loadArticleById, vocabInputTokens, vocabOutputTokens, ttsPlaying, toggleTTS } = useArticleStore();
@@ -47,7 +51,6 @@ export default function ArticleScreen() {
   );
 
   const [saving, setSaving] = useState(false);
-  const [audioReady, setAudioReady] = useState(false);
   const isSaved = savedArticles.some((a) => a.id === id);
 
   useEffect(() => {
@@ -115,9 +118,7 @@ export default function ArticleScreen() {
 
   async function handleAddToVocab() {
     if (!article) return;
-    const raw = await AsyncStorage.getItem(SETTINGS_KEY);
-    const settings = raw ? JSON.parse(raw) : {};
-    const apiKey = settings.apiKey || process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
+    const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
 
     const isVerb = popupPos?.toLowerCase().includes('verb');
     let conjugation: VerbConjugation | undefined;
@@ -139,22 +140,6 @@ export default function ArticleScreen() {
     });
   }
 
-  function handleGenerateAudio() {
-    Alert.alert(
-      'Generate audio?',
-      `This will generate spoken audio for the article. Estimated cost: $0.00.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Generate audio',
-          onPress: () => {
-            setAudioReady(true);
-            useArticleStore.setState({ ttsPlaying: true });
-          },
-        },
-      ]
-    );
-  }
 
   const fromName = getLanguageName(article.sourceLanguage);
   const toName = getLanguageName(article.targetLanguage);
@@ -198,13 +183,12 @@ export default function ArticleScreen() {
           </Text>
         </View>
       )}
-
       <TouchableOpacity
-        style={[styles.generateAudioBtn, audioReady && styles.generateAudioBtnActive]}
-        onPress={audioReady ? toggleTTS : handleGenerateAudio}
+        style={[styles.generateAudioBtn, ttsPlaying && styles.generateAudioBtnActive]}
+        onPress={toggleTTS}
       >
-        <Text style={[styles.generateAudioText, audioReady && styles.generateAudioTextActive]}>
-          {!audioReady ? '🔊 Generate audio' : ttsPlaying ? '⏹ Stop' : '▶ Read aloud'}
+        <Text style={[styles.generateAudioText, ttsPlaying && styles.generateAudioTextActive]}>
+          {ttsPlaying ? '⏹ Stop' : '▶ Read aloud'}
         </Text>
       </TouchableOpacity>
 
@@ -216,6 +200,7 @@ export default function ArticleScreen() {
             pair={item}
             vocabList={article.vocabList}
             cardWidth={cardWidth}
+            language={article.targetLanguage}
             onWordTap={handleWordTap}
           />
         )}
@@ -239,8 +224,8 @@ export default function ArticleScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f2f4f8' },
+const themedStyles = (colors: ThemeColors) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.background },
   langBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -248,49 +233,49 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#ddd',
-    backgroundColor: '#f9f9f9',
+    borderBottomColor: colors.border,
+    backgroundColor: colors.surface,
   },
-  langText: { fontSize: 14, color: '#555' },
+  langText: { fontSize: 14, color: colors.textMuted },
   saveButton: {
-    backgroundColor: '#4A90D9',
+    backgroundColor: colors.accent,
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 8,
   },
-  saveButtonDone: { backgroundColor: '#e8f5e9' },
-  saveText: { fontSize: 14, fontWeight: '700', color: '#fff' },
-  saveTextDone: { color: '#2e7d32' },
+  saveButtonDone: { backgroundColor: colors.successSoft },
+  saveText: { fontSize: 14, fontWeight: '700', color: colors.accentText },
+  saveTextDone: { color: colors.success },
   costBar: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
     paddingHorizontal: 16,
     paddingVertical: 4,
-    backgroundColor: '#f9f9f9',
+    backgroundColor: colors.surface,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#eee',
+    borderBottomColor: colors.border,
   },
-  costText: { fontSize: 12, color: '#aaa' },
+  costText: { fontSize: 12, color: colors.textFaint },
   generateAudioBtn: {
     marginHorizontal: 16,
     marginTop: 10,
     marginBottom: 2,
     paddingVertical: 10,
     borderRadius: 10,
-    backgroundColor: '#f0f6ff',
+    backgroundColor: colors.accentSoft,
     borderWidth: 1,
-    borderColor: '#c8ddf5',
+    borderColor: colors.accent,
     alignItems: 'center',
   },
   generateAudioBtnActive: {
-    backgroundColor: '#4A90D9',
-    borderColor: '#4A90D9',
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
-  generateAudioText: { fontSize: 14, fontWeight: '600', color: '#4A90D9' },
-  generateAudioTextActive: { color: '#fff' },
+  generateAudioText: { fontSize: 14, fontWeight: '600', color: colors.accent },
+  generateAudioTextActive: { color: colors.accentText },
   list: { flex: 1 },
   listContent: { padding: 16, paddingBottom: 120 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
-  errorText: { fontSize: 16, color: '#555' },
-  link: { fontSize: 15, color: '#4A90D9' },
+  errorText: { fontSize: 16, color: colors.textMuted },
+  link: { fontSize: 15, color: colors.accent },
 });

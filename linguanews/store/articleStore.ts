@@ -58,7 +58,7 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
       }
 
       set({ loadingStep: 'Translating…' });
-      const apiKey = settings.apiKey || process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
+      const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
       const result = await translateArticle(
         rawText,
         settings.sourceLanguage,
@@ -95,14 +95,15 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
     const cache = get().wordLookupCache;
     if (cache[word]) return cache[word];
 
-    const apiKey = settings.apiKey || process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
-    const articleText = get().currentArticle?.sentencePairs.map((p) => p.translation).join(' ');
+    const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
+    const currentArticle = get().currentArticle;
+    const articleText = currentArticle?.sentencePairs.map((p) => p.translation).join(' ');
     const result: LookupResult = await lookupWordDefinition(
       word,
       settings.targetLanguage,
       settings.sourceLanguage,
       apiKey,
-      articleText
+      articleText,
     );
 
     const { vocabInputTokens, vocabOutputTokens } = get();

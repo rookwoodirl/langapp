@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { UserVocabWord, VerbConjugation } from '../types';
-import { apiAddVocabWord, apiLoadVocab, apiRemoveVocabWord } from '../services/api';
+import { apiAddVocabWord, apiLoadVocab, apiRemoveVocabWord, apiUpdateVocabWord } from '../services/api';
 
 interface VocabStore {
   words: UserVocabWord[];
@@ -13,6 +13,13 @@ interface VocabStore {
     gender?: string;
     article?: string;
     conjugation?: VerbConjugation;
+  }) => Promise<void>;
+  updateWord: (vocabWordId: string, params: {
+    word?: string;
+    definition?: string;
+    partOfSpeech?: string;
+    gender?: string;
+    article?: string;
   }) => Promise<void>;
   removeWord: (userVocabId: string) => Promise<void>;
 }
@@ -42,6 +49,12 @@ export const useVocabStore = create<VocabStore>((set, get) => ({
     };
     set({ words: [optimistic, ...get().words] });
     // Reload to get real IDs
+    const words = await apiLoadVocab();
+    set({ words });
+  },
+
+  updateWord: async (vocabWordId, params) => {
+    await apiUpdateVocabWord(vocabWordId, params);
     const words = await apiLoadVocab();
     set({ words });
   },

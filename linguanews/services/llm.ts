@@ -11,6 +11,7 @@ export interface LLMParams {
   apiKey: string;
   model: string;
   maxTokens: number;
+  language?: string;
   system?: string;
   messages: Anthropic.MessageParam[];
 }
@@ -22,7 +23,7 @@ export interface LLMResult {
 }
 
 export async function callLLM(params: LLMParams): Promise<LLMResult> {
-  const { source, apiKey, model, maxTokens, system, messages } = params;
+  const { source, apiKey, model, maxTokens, language, system, messages } = params;
   if (!apiKey) throw new Error('No API key set.');
 
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -42,6 +43,7 @@ export async function callLLM(params: LLMParams): Promise<LLMResult> {
   await recordApiCost({
     source,
     model,
+    language,
     inputCreditRate: rates.input,
     totalInputCredits: message.usage.input_tokens,
     outputCreditRate: rates.output,

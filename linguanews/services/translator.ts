@@ -59,7 +59,7 @@ export async function translateArticle(
   difficulty = 'intermediate',
   source: CostSource = 'article',
 ): Promise<TranslationResult> {
-  if (!apiKey) throw new Error('No API key set. Add your Anthropic API key in Settings.');
+  if (!apiKey) throw new Error('No Anthropic API key is configured for this app.');
 
   const system = buildSystemPrompt(sourceLanguage, targetLanguage, difficulty);
   const truncated = text.length > 40000 ? text.slice(0, 40000) + '…' : text;
@@ -69,6 +69,7 @@ export async function translateArticle(
     apiKey,
     model: 'claude-sonnet-4-6',
     maxTokens: 32768,
+    language: targetLanguage,
     system,
     messages: [{ role: 'user', content: truncated }],
   });
@@ -84,6 +85,7 @@ export async function translateArticle(
       apiKey,
       model: 'claude-sonnet-4-6',
       maxTokens: 32768,
+      language: targetLanguage,
       system,
       messages: [
         { role: 'user', content: truncated },

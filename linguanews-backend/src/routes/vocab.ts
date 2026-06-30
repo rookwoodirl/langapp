@@ -75,6 +75,48 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
+// Edit a vocab word's notecard fields (the vocab_words row is shared by all users who saved it)
+router.put('/:vocabWordId', async (req: Request, res: Response) => {
+  const { vocabWordId } = req.params;
+  const { user_id, word, definition, part_of_speech, gender, article } = req.body;
+
+  if (!user_id) {
+    return res.status(400).json({ error: 'user_id is required' });
+  }
+
+  try {
+    const owns = await pool.query(
+      `SELECT 1 FROM user_vocab WHERE user_id = $1 AND vocab_word_id = $2`,
+      [user_id, vocabWordId]
+    );
+    if (owns.rowCount === 0) {
+      return res.status(404).json({ error: 'Vocab word not found for this user' });
+    }
+
+    const result = await pool.query(
+      `UPDATE vocab_words
+         SET word = COALESCE($1, word),
+             definition = COALESCE($2, definition),
+             part_of_speech = COALESCE($3, part_of_speech),
+             gender = $4,
+             article = $5
+       WHERE id = $6
+       RETURNING id, word, language, definition, part_of_speech, gender, article, conjugation`,
+      [word ?? null, definition ?? null, part_of_speech ?? null, gender ?? null, article ?? null, vocabWordId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Vocab word not found' });
+    }
+    return res.json(result.rows[0]);
+  } catch (err: any) {
+    if (err?.code === '23505') {
+      return res.status(409).json({ error: 'Another word already uses that spelling in this language' });
+    }
+    console.error('PUT /vocab/:vocabWordId error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
 // Remove a word from user's vocab (by user_vocab.id)
 router.delete('/:id', async (req: Request, res: Response) => {
   const { id } = req.params;

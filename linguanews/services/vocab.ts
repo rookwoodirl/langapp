@@ -1,5 +1,7 @@
-import { VocabWord, VerbConjugation } from '../types';
+import { VerbConjugation } from '../types';
 import { callLLM } from './llm';
+import { lookupWiktionary } from './wiktionary';
+import { isGenderedLanguage } from '../constants/languages';
 
 export interface LookupResult {
   definition: string;
@@ -24,10 +26,31 @@ export async function lookupWordDefinition(
   targetLanguage: string,
   sourceLanguage: string,
   apiKey: string,
-  articleContext?: string
+  articleContext?: string,
 ): Promise<LookupResult> {
+  // Wiktionary covers English-source lookups with zero LLM cost.
+  // Non-English source falls through to LLM so definitions come in the right language.
+  if (sourceLanguage === 'en') {
+    const wikt = await lookupWiktionary(word, targetLanguage);
+    if (wikt) {
+      return {
+        definition: wikt.definition,
+        partOfSpeech: wikt.partOfSpeech,
+        gender: wikt.gender,
+        article: wikt.article,
+        infinitive: wikt.infinitive,
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+    }
+  }
+
   const contextSnippet = articleContext ? extractContext(articleContext, word) : '';
   const contextLine = contextSnippet ? `The word appears in this passage: "${contextSnippet}"\n\n` : '';
+  const genderLines = isGenderedLanguage(targetLanguage)
+    ? `- "gender": for nouns only — "masculine", "feminine", "neuter", or "common"; omit for all other parts of speech\n` +
+      `- "article": for nouns only — the definite article in ${targetLanguage} (e.g. "der", "la", "the"); omit for all other parts of speech\n`
+    : '';
 
   const system =
     `You are a bilingual translation dictionary. A ${sourceLanguage} speaker is learning ${targetLanguage}. ` +
@@ -38,8 +61,7 @@ export async function lookupWordDefinition(
     `For nouns, use a short noun phrase.\n` +
     `- "partOfSpeech": grammatical category (noun, verb, adjective, adverb, phrase, etc.)\n` +
     `- "infinitive": for verbs and verb phrases only — the infinitive/base form in ${targetLanguage} (e.g. "laufen", "être", "haber comido"); omit for non-verbs\n` +
-    `- "gender": for nouns only — "masculine", "feminine", "neuter", or "common"; omit for all other parts of speech\n` +
-    `- "article": for nouns only — the definite article in ${targetLanguage} (e.g. "der", "la", "the"); omit for all other parts of speech\n` +
+    `${genderLines}` +
     `Respond with raw JSON only. No markdown, no code fences, no preamble.`;
 
   const result = await callLLM({
@@ -47,6 +69,7 @@ export async function lookupWordDefinition(
     apiKey,
     model: 'claude-sonnet-4-6',
     maxTokens: 256,
+    language: targetLanguage,
     system,
     messages: [{ role: 'user', content: `${targetLanguage} word or phrase: "${word}"` }],
   });
@@ -87,22 +110,23 @@ export async function lookupWordDefinition(
   };
 }
 
-export async function generateRecommendedVocab(
+export async function selectVocabWords(
   translatedText: string,
   targetLanguage: string,
   sourceLanguage: string,
   existingWords: string[],
-  apiKey: string
-): Promise<{ words: VocabWord[]; inputTokens: number; outputTokens: number }> {
+  apiKey: string,
+): Promise<{ words: string[]; inputTokens: number; outputTokens: number }> {
   const knownStr = existingWords.length
     ? ` Do not include words the learner already knows: ${existingWords.slice(0, 80).join(', ')}.`
     : '';
 
   const result = await callLLM({
-    source: 'vocab',
+    source: 'vocab_selection',
     apiKey,
-    model: 'claude-sonnet-4-6',
-    maxTokens: 1024,
+    model: 'claude-haiku-4-5-20251001',
+    maxTokens: 256,
+    language: targetLanguage,
     system:
       `You are a language learning assistant helping a ${sourceLanguage} speaker learn ${targetLanguage}. ` +
       `Identify the most useful vocabulary words from the given text for the learner to study.${knownStr}`,
@@ -111,9 +135,7 @@ export async function generateRecommendedVocab(
         role: 'user',
         content:
           `${targetLanguage} text:\n\n${translatedText.slice(0, 4000)}\n\n` +
-          `Return a JSON array of up to 10 vocabulary words. ` +
-          `Each item: {"word":"...","definition":"(in ${sourceLanguage})...","partOfSpeech":"..."}. ` +
-          `Raw JSON array only, no markdown.`,
+          `Return a JSON array of up to 10 words (base/infinitive form). Raw JSON array of strings only, no markdown.`,
       },
     ],
   });
@@ -122,15 +144,18 @@ export async function generateRecommendedVocab(
   const start = raw.indexOf('[');
   const end = raw.lastIndexOf(']');
   if (start === -1 || end === -1) throw new Error('Could not parse vocab list from response.');
-  const words = JSON.parse(raw.slice(start, end + 1)) as VocabWord[];
-
+  const parsed = JSON.parse(raw.slice(start, end + 1)) as unknown[];
+  // Defensively extract strings — Haiku sometimes returns objects like {"word":"..."} instead of plain strings
+  const words = parsed.map((item) =>
+    typeof item === 'string' ? item : (item as Record<string, string>).word ?? String(item)
+  );
   return { words, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 
 export async function getVerbConjugation(
   verb: string,
   language: string,
-  apiKey: string
+  apiKey: string,
 ): Promise<VerbConjugation | null> {
   if (!apiKey) return null;
   try {
@@ -139,6 +164,7 @@ export async function getVerbConjugation(
       apiKey,
       model: 'claude-haiku-4-5-20251001',
       maxTokens: 512,
+      language,
       messages: [
         {
           role: 'user',

@@ -11,12 +11,21 @@ import {
   NativeScrollEvent,
 } from 'react-native';
 import { VocabWord, SentencePair } from '../types';
+import { useColors } from '../hooks/useColors';
+import { ThemeColors } from '../constants/theme';
 
 interface Props {
   pair: SentencePair;
   vocabList: VocabWord[];
   cardWidth: number;
+  language: string;
   onWordTap: (word: string, definition?: string, partOfSpeech?: string) => void;
+}
+
+// Chinese has no whitespace between words, so a non-vocab segment is otherwise
+// treated as a single giant token. Split it into individual characters instead.
+function isCharacterSegmented(language: string): boolean {
+  return language.startsWith('zh');
 }
 
 type TokenKey = string; // `${segIdx}-${tokenIdx}`
@@ -40,7 +49,9 @@ function cleanToken(t: string): string {
   return t.replace(/[^a-zA-ZÀ-ÿÀ-ɏḀ-ỿ]/g, '');
 }
 
-export default function ParagraphCard({ pair, vocabList, cardWidth, onWordTap }: Props) {
+export default function ParagraphCard({ pair, vocabList, cardWidth, language, onWordTap }: Props) {
+  const colors = useColors();
+  const styles = useMemo(() => themedStyles(colors), [colors]);
   const pagerRef = useRef<ScrollView>(null);
   const containerRef = useRef<View>(null);
   const [page, setPage] = useState(0);
@@ -83,6 +94,11 @@ export default function ParagraphCard({ pair, vocabList, cardWidth, onWordTap }:
       if (!seg.text) return;
       if (seg.isVocab) {
         result.push({ key: `${si}-0`, display: seg.text, lookup: seg.text, isVocab: true, vocab: seg.vocab, isSpace: false });
+      } else if (isCharacterSegmented(language)) {
+        Array.from(seg.text).forEach((ch, ti) => {
+          const isSpace = /^\s+$/.test(ch);
+          result.push({ key: `${si}-${ti}`, display: ch, lookup: isSpace ? ' ' : ch, isVocab: false, isSpace });
+        });
       } else {
         seg.text.split(/(\s+)/).forEach((tok, ti) => {
           if (!tok) return;
@@ -92,7 +108,7 @@ export default function ParagraphCard({ pair, vocabList, cardWidth, onWordTap }:
       }
     });
     return result;
-  }, [segments]);
+  }, [segments, language]);
 
   const sortedKeys = useMemo(() => tokens.filter((t) => !t.isSpace).map((t) => t.key), [tokens]);
 
@@ -291,12 +307,12 @@ export default function ParagraphCard({ pair, vocabList, cardWidth, onWordTap }:
   );
 }
 
-const styles = StyleSheet.create({
+const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   card: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderRadius: 14,
     marginBottom: 12,
-    shadowColor: '#000',
+    shadowColor: colors.shadow,
     shadowOpacity: 0.05,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
@@ -306,7 +322,7 @@ const styles = StyleSheet.create({
   pageLabel: {
     fontSize: 10,
     fontWeight: '700',
-    color: '#bbb',
+    color: colors.textFaint,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
     marginBottom: 8,
@@ -316,25 +332,25 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     alignItems: 'flex-start',
   },
-  body: { fontSize: 17, lineHeight: 28, color: '#111' },
+  body: { fontSize: 17, lineHeight: 28, color: colors.text },
   tokenBase: { fontSize: 17, lineHeight: 28 },
-  space: { fontSize: 17, lineHeight: 28, color: '#111' },
+  space: { fontSize: 17, lineHeight: 28, color: colors.text },
   highlight: {
-    color: '#1a56a4',
+    color: colors.highlight,
     textDecorationLine: 'underline',
     textDecorationStyle: 'dotted',
   },
-  plainWord: { color: '#111' },
+  plainWord: { color: colors.text },
   selectedToken: {
-    backgroundColor: '#FFF3CD',
-    color: '#5a4000',
+    backgroundColor: colors.selection,
+    color: colors.selectionText,
     borderRadius: 3,
     overflow: 'hidden',
   },
-  unavailable: { fontSize: 14, color: '#aaa', fontStyle: 'italic' },
+  unavailable: { fontSize: 14, color: colors.textFaint, fontStyle: 'italic' },
   dots: { flexDirection: 'row', justifyContent: 'center', paddingVertical: 8, gap: 6 },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#ddd' },
-  dotActive: { backgroundColor: '#4A90D9' },
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.border },
+  dotActive: { backgroundColor: colors.accent },
 
   phraseModalOuter: {
     flex: 1,
@@ -342,8 +358,8 @@ const styles = StyleSheet.create({
   },
   phraseBar: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e0e0e0',
-    backgroundColor: '#fafafa',
+    borderTopColor: colors.border,
+    backgroundColor: colors.surfaceAlt,
     padding: 12,
     paddingBottom: 28,
     gap: 8,
@@ -351,7 +367,7 @@ const styles = StyleSheet.create({
   phrasePreview: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#333',
+    color: colors.text,
     fontStyle: 'italic',
   },
   phraseActions: { flexDirection: 'row', gap: 8 },
@@ -360,16 +376,16 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     alignItems: 'center',
     borderRadius: 8,
-    backgroundColor: '#ebebeb',
+    backgroundColor: colors.chipBg,
   },
-  cancelBtnText: { fontSize: 14, fontWeight: '600', color: '#555' },
+  cancelBtnText: { fontSize: 14, fontWeight: '600', color: colors.textMuted },
   lookupBtn: {
     flex: 1,
     paddingVertical: 9,
     alignItems: 'center',
     borderRadius: 8,
-    backgroundColor: '#4A90D9',
+    backgroundColor: colors.accent,
   },
-  lookupBtnDisabled: { backgroundColor: '#b0c8ea' },
-  lookupBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  lookupBtnDisabled: { backgroundColor: colors.textFaint },
+  lookupBtnText: { fontSize: 14, fontWeight: '700', color: colors.accentText },
 });

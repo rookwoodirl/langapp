@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, Modal, Pressable, ScrollView, TouchableOpacity } from 'react-native';
 import { VerbConjugation } from '../types';
+import { useColors } from '../hooks/useColors';
+import { ThemeColors } from '../constants/theme';
 
 interface Props {
   visible: boolean;
@@ -10,6 +12,9 @@ interface Props {
 }
 
 export default function ConjugationModal({ visible, infinitive, conjugation, onClose }: Props) {
+  const colors = useColors();
+  const styles = useMemo(() => themedStyles(colors), [colors]);
+
   // Support both new tenses[] format and legacy present[] format
   const tenses =
     conjugation.tenses ??
@@ -42,10 +47,10 @@ export default function ConjugationModal({ visible, infinitive, conjugation, onC
   );
 }
 
-const styles = StyleSheet.create({
+const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
   sheet: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingHorizontal: 20,
@@ -54,21 +59,21 @@ const styles = StyleSheet.create({
     maxHeight: '80%',
   },
   handle: {
-    width: 40, height: 4, borderRadius: 2, backgroundColor: '#ddd',
+    width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border,
     alignSelf: 'center', marginBottom: 16,
   },
-  infinitive: { fontSize: 20, fontWeight: '800', color: '#111', marginBottom: 16 },
+  infinitive: { fontSize: 20, fontWeight: '800', color: colors.text, marginBottom: 16 },
   scroll: { maxHeight: 380 },
   tenseBlock: { marginBottom: 20 },
   tenseName: {
-    fontSize: 11, fontWeight: '700', color: '#4A90D9',
+    fontSize: 11, fontWeight: '700', color: colors.accent,
     textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8,
   },
-  form: { fontSize: 15, color: '#333', lineHeight: 24 },
-  empty: { fontSize: 14, color: '#aaa', textAlign: 'center', paddingVertical: 20 },
+  form: { fontSize: 15, color: colors.textMuted, lineHeight: 24 },
+  empty: { fontSize: 14, color: colors.textFaint, textAlign: 'center', paddingVertical: 20 },
   doneBtn: {
-    marginTop: 16, backgroundColor: '#4A90D9', borderRadius: 12,
+    marginTop: 16, backgroundColor: colors.accent, borderRadius: 12,
     paddingVertical: 14, alignItems: 'center',
   },
-  doneBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+  doneBtnText: { fontSize: 15, fontWeight: '700', color: colors.accentText },
 });

@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
+  TextInput,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
@@ -21,15 +22,17 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useArticle } from '../hooks/useArticle';
 import LanguagePicker from '../components/LanguagePicker';
 import { UserSettings, Article, UserVocabWord, DifficultyLevel } from '../types';
-import { DEFAULT_SOURCE_LANGUAGE, DEFAULT_TARGET_LANGUAGE } from '../constants/languages';
+import { DEFAULT_SOURCE_LANGUAGE, DEFAULT_TARGET_LANGUAGE, getLanguageName } from '../constants/languages';
 import { useArticleStore } from '../store/articleStore';
 import { useVocabStore } from '../store/vocabStore';
 import { calcCost, formatCost, formatTokens } from '../utils/cost';
-import { generateRecommendedVocab } from '../services/vocab';
+import { selectVocabWords, lookupWordDefinition, getVerbConjugation } from '../services/vocab';
 import ConjugationModal from '../components/ConjugationModal';
 import { VerbConjugation } from '../types';
 import { useUsageStore } from '../store/usageStore';
-import { apiGetCostSummary, CostSummaryRow } from '../services/api';
+import { ttsService } from '../services/tts';
+import { useColors } from '../hooks/useColors';
+import { ThemeColors } from '../constants/theme';
 
 const DIFFICULTIES: DifficultyLevel[] = ['beginner', 'intermediate', 'advanced'];
 
@@ -42,40 +45,61 @@ export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const pagerRef = useRef<ScrollView>(null);
   const [activeTab, setActiveTab] = useState<number>(0);
+  const colors = useColors();
+  const styles = useMemo(() => themedStyles(colors), [colors]);
 
   const [url, setUrl] = useState('');
   const [settings, setSettings] = useState<UserSettings>({
     sourceLanguage: DEFAULT_SOURCE_LANGUAGE,
     targetLanguage: DEFAULT_TARGET_LANGUAGE,
-    apiKey: '',
     difficulty: 'intermediate',
   });
 
   const { fetchArticle, isLoading, loadingStep, error, currentArticle } = useArticle();
   const pendingSourceRef = useRef<'article' | 'article-regeneration'>('article');
   const { savedArticles, loadSavedArticles, setCurrentArticle, deleteArticle } = useArticleStore();
-  const { words: vocabWords, loadVocab, removeWord, addWord } = useVocabStore();
+  const { words: vocabWords, loadVocab, removeWord, addWord, updateWord } = useVocabStore();
 
   const { load: loadUsage } = useUsageStore();
-
-  const [costSummary, setCostSummary] = useState<Record<string, CostSummaryRow>>({});
-
-  const SOURCE_ORDER = ['article', 'article-regeneration', 'vocab', 'audio'] as const;
-  const SOURCE_LABELS: Record<string, string> = {
-    'article': 'Translations',
-    'article-regeneration': 'Re-translations',
-    'vocab': 'Vocab',
-    'audio': 'Audio',
-  };
 
   const [vocabModalArticle, setVocabModalArticle] = useState<Article | null>(null);
   const [contextMenu, setContextMenu] = useState<Article | null>(null);
   const [regenLoading, setRegenLoading] = useState(false);
   const [conjModal, setConjModal] = useState<{ infinitive: string; conjugation: VerbConjugation } | null>(null);
+  const [vocabLangFilter, setVocabLangFilter] = useState<string | null>(null);
+  const [vocabSearch, setVocabSearch] = useState('');
+  const [editingWord, setEditingWord] = useState<UserVocabWord | null>(null);
+  const [editForm, setEditForm] = useState({ word: '', definition: '', partOfSpeech: '', gender: '', article: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
 
-  async function loadCostSummary() {
-    const summary = await apiGetCostSummary();
-    setCostSummary(summary);
+  function openEditModal(word: UserVocabWord) {
+    setEditingWord(word);
+    setEditForm({
+      word: word.word,
+      definition: word.definition,
+      partOfSpeech: word.partOfSpeech ?? '',
+      gender: word.gender ?? '',
+      article: word.article ?? '',
+    });
+  }
+
+  async function handleSaveEdit() {
+    if (!editingWord) return;
+    setSavingEdit(true);
+    try {
+      await updateWord(editingWord.vocabWordId, {
+        word: editForm.word.trim(),
+        definition: editForm.definition.trim(),
+        partOfSpeech: editForm.partOfSpeech.trim() || undefined,
+        gender: editForm.gender.trim() || undefined,
+        article: editForm.article.trim() || undefined,
+      });
+      setEditingWord(null);
+    } catch (err) {
+      Alert.alert('Error', err instanceof Error ? err.message : 'Failed to update word.');
+    } finally {
+      setSavingEdit(false);
+    }
   }
 
   useEffect(() => {
@@ -83,7 +107,6 @@ export default function HomeScreen() {
       if (raw) setSettings(JSON.parse(raw));
     });
     loadUsage();
-    loadCostSummary();
   }, []);
 
   useEffect(() => {
@@ -98,7 +121,7 @@ export default function HomeScreen() {
 
   // Load data when switching tabs
   useEffect(() => {
-    if (activeTab === 1) { loadSavedArticles(); loadCostSummary(); }
+    if (activeTab === 1) loadSavedArticles();
     if (activeTab === 2) loadVocab();
   }, [activeTab]);
 
@@ -136,19 +159,55 @@ export default function HomeScreen() {
   }
 
   async function handleGenerateVocab(article: Article) {
-    const apiKey = settings.apiKey || process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
-    if (!apiKey) { Alert.alert('No API key', 'Add your Anthropic API key in Settings.'); return; }
+    const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
+    if (!apiKey) { Alert.alert('Missing configuration', 'No Anthropic API key is configured for this app.'); return; }
     setRegenLoading(true);
     try {
       const existing = vocabWords.map((w) => w.word);
       const articleText = article.sentencePairs.map((p) => p.translation).join(' ');
-      const result = await generateRecommendedVocab(
+
+      // Step 1: pick words (cheap selection call)
+      const selection = await selectVocabWords(
         articleText, article.targetLanguage, article.sourceLanguage, existing, apiKey
       );
-      useUsageStore.getState().addVocab(result.inputTokens, result.outputTokens);
+      useUsageStore.getState().addVocab(selection.inputTokens, selection.outputTokens);
+
+      // Step 2: look up each word through the same pipeline as word taps
+      const lookups = await Promise.all(
+        selection.words.map((word) =>
+          lookupWordDefinition(word, article.targetLanguage, article.sourceLanguage, apiKey, articleText)
+        )
+      );
+      useUsageStore.getState().addVocab(
+        lookups.reduce((s, r) => s + r.inputTokens, 0),
+        lookups.reduce((s, r) => s + r.outputTokens, 0),
+      );
+
+      // Step 3: conjugations for verbs, same as handleAddToVocab
+      const enriched = await Promise.all(
+        lookups.map(async (lookup, i) => {
+          const isVerb = lookup.partOfSpeech?.toLowerCase().includes('verb');
+          const wordCandidate = lookup.infinitive ?? selection.words[i];
+          const conjugation = isVerb
+            ? (await getVerbConjugation(wordCandidate, article.targetLanguage, apiKey)) ?? undefined
+            : undefined;
+          // Mirror tap flow: conjugation.infinitive takes priority, then lookup.infinitive, then selected word
+          const saveWord = conjugation?.infinitive ?? lookup.infinitive ?? selection.words[i];
+          return { lookup, saveWord, conjugation };
+        })
+      );
+
       const settled = await Promise.allSettled(
-        result.words.map((word) =>
-          addWord({ word: word.word, language: article.targetLanguage, definition: word.definition, partOfSpeech: word.partOfSpeech })
+        enriched.map(({ lookup, saveWord, conjugation }) =>
+          addWord({
+            word: saveWord,
+            language: article.targetLanguage,
+            definition: lookup.definition,
+            partOfSpeech: lookup.partOfSpeech,
+            gender: lookup.gender,
+            article: lookup.article,
+            conjugation,
+          })
         )
       );
       const saved = settled.filter((r) => r.status === 'fulfilled').length;
@@ -269,7 +328,7 @@ export default function HomeScreen() {
 
       {isLoading ? (
         <View style={styles.loadingBox}>
-          <ActivityIndicator color="#4A90D9" size="large" />
+          <ActivityIndicator color={colors.accent} size="large" />
           <Text style={styles.loadingText}>{loadingStep}</Text>
         </View>
       ) : (
@@ -281,12 +340,10 @@ export default function HomeScreen() {
   );
 
   // ── Articles page ───────────────────────────────────────────────────────────
-  const lifetimeCost = Object.values(costSummary).reduce((sum, row) => sum + row.totalCost, 0);
-  const breakdownItems = SOURCE_ORDER.filter((src) => (costSummary[src]?.totalCost ?? 0) > 0);
-
   const articlesPage = (
     <FlatList
       style={{ width }}
+      nestedScrollEnabled
       contentContainerStyle={savedArticles.length === 0 ? styles.emptyContainer : styles.listContent}
       data={savedArticles}
       keyExtractor={(a) => a.id}
@@ -297,24 +354,10 @@ export default function HomeScreen() {
               <Text style={styles.statValue}>{savedArticles.length}</Text>
               <Text style={styles.statLabel}>saved</Text>
             </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statItem}>
-              <Text style={styles.statValue}>{formatCost(lifetimeCost)}</Text>
-              <Text style={styles.statLabel}>lifetime total</Text>
-            </View>
           </View>
-          {breakdownItems.length > 0 && (
-            <View style={styles.statsBreakdown}>
-              {breakdownItems.map((src, i) => (
-                <React.Fragment key={src}>
-                  {i > 0 && <Text style={styles.breakdownDot}>·</Text>}
-                  <Text style={styles.breakdownItem}>
-                    {SOURCE_LABELS[src]} {formatCost(costSummary[src].totalCost)}
-                  </Text>
-                </React.Fragment>
-              ))}
-            </View>
-          )}
+          <TouchableOpacity style={styles.costLinkBtn} onPress={() => router.push('/costs')}>
+            <Text style={styles.costLinkText}>View cost analysis →</Text>
+          </TouchableOpacity>
         </View>
       }
       ListEmptyComponent={
@@ -356,17 +399,66 @@ export default function HomeScreen() {
   );
 
   // ── Vocab page ──────────────────────────────────────────────────────────────
+  const vocabLanguages = Array.from(new Set(vocabWords.map((w) => w.language)));
+  const searchTerm = vocabSearch.trim().toLowerCase();
+  const filteredVocabWords = vocabWords
+    .filter((w) => !vocabLangFilter || w.language === vocabLangFilter)
+    .filter((w) => !searchTerm || w.word.toLowerCase().includes(searchTerm) || w.definition.toLowerCase().includes(searchTerm));
+
   const vocabPage = (
     <FlatList
       style={{ width }}
-      contentContainerStyle={vocabWords.length === 0 ? styles.emptyContainer : styles.listContent}
-      data={vocabWords}
+      nestedScrollEnabled
+      contentContainerStyle={filteredVocabWords.length === 0 ? styles.emptyContainer : styles.listContent}
+      data={filteredVocabWords}
       keyExtractor={(w) => w.id}
+      ListHeaderComponent={
+        <View>
+          {vocabWords.length > 0 && (
+            <TextInput
+              style={styles.vocabSearchInput}
+              placeholder="Search words or definitions…"
+              placeholderTextColor={colors.textFaint}
+              value={vocabSearch}
+              onChangeText={setVocabSearch}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          )}
+          {vocabLanguages.length > 1 && (
+            <View style={styles.langFilterRow}>
+              <TouchableOpacity
+                style={[styles.langFilterChip, !vocabLangFilter && styles.langFilterChipActive]}
+                onPress={() => setVocabLangFilter(null)}
+              >
+                <Text style={[styles.langFilterText, !vocabLangFilter && styles.langFilterTextActive]}>All</Text>
+              </TouchableOpacity>
+              {vocabLanguages.map((lang) => (
+                <TouchableOpacity
+                  key={lang}
+                  style={[styles.langFilterChip, vocabLangFilter === lang && styles.langFilterChipActive]}
+                  onPress={() => setVocabLangFilter(lang)}
+                >
+                  <Text style={[styles.langFilterText, vocabLangFilter === lang && styles.langFilterTextActive]}>
+                    {getLanguageName(lang)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
+      }
       ListEmptyComponent={
         <View style={styles.emptyState}>
           <Text style={styles.emptyIcon}>📖</Text>
-          <Text style={styles.emptyTitle}>No vocab words yet</Text>
-          <Text style={styles.emptySubtitle}>Tap any highlighted word while reading and hit "Add to vocab".</Text>
+          <Text style={styles.emptyTitle}>
+            {vocabWords.length === 0 ? 'No vocab words yet' : 'No matches'}
+          </Text>
+          <Text style={styles.emptySubtitle}>
+            {vocabWords.length === 0
+              ? 'Tap any highlighted word while reading and hit "Add to vocab".'
+              : 'Try a different search term or language filter.'}
+          </Text>
         </View>
       }
       renderItem={({ item }) => (
@@ -379,9 +471,17 @@ export default function HomeScreen() {
               {item.partOfSpeech ? <Text style={styles.vocabPos}>{item.partOfSpeech}</Text> : null}
               {item.gender ? <Text style={styles.vocabGender}>{item.gender}</Text> : null}
             </View>
-            <TouchableOpacity onPress={() => removeWord(item.id)} hitSlop={8}>
-              <Text style={styles.vocabRemove}>✕</Text>
-            </TouchableOpacity>
+            <View style={styles.vocabCardActions}>
+              <TouchableOpacity onPress={() => ttsService.speak(item.word, item.language)} hitSlop={8}>
+                <Text style={styles.vocabSpeak}>🔊</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => openEditModal(item)} hitSlop={8}>
+                <Text style={styles.vocabEdit}>✎</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => removeWord(item.id)} hitSlop={8}>
+                <Text style={styles.vocabRemove}>✕</Text>
+              </TouchableOpacity>
+            </View>
           </View>
           <Text style={styles.vocabDefinition}>{item.definition}</Text>
           {item.conjugation && (
@@ -522,12 +622,75 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
       </Modal>
+
+      {/* Edit notecard modal */}
+      <Modal
+        visible={!!editingWord}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setEditingWord(null)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setEditingWord(null)} />
+        <View style={styles.modalSheet}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>Edit Notecard</Text>
+          <ScrollView keyboardShouldPersistTaps="handled">
+            <Text style={styles.editLabel}>Word</Text>
+            <TextInput
+              style={styles.editInput}
+              value={editForm.word}
+              onChangeText={(v) => setEditForm({ ...editForm, word: v })}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Text style={styles.editLabel}>Definition</Text>
+            <TextInput
+              style={[styles.editInput, styles.editInputMultiline]}
+              value={editForm.definition}
+              onChangeText={(v) => setEditForm({ ...editForm, definition: v })}
+              multiline
+            />
+            <Text style={styles.editLabel}>Part of speech</Text>
+            <TextInput
+              style={styles.editInput}
+              value={editForm.partOfSpeech}
+              onChangeText={(v) => setEditForm({ ...editForm, partOfSpeech: v })}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Text style={styles.editLabel}>Gender</Text>
+            <TextInput
+              style={styles.editInput}
+              value={editForm.gender}
+              onChangeText={(v) => setEditForm({ ...editForm, gender: v })}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Text style={styles.editLabel}>Article</Text>
+            <TextInput
+              style={styles.editInput}
+              value={editForm.article}
+              onChangeText={(v) => setEditForm({ ...editForm, article: v })}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </ScrollView>
+          <View style={styles.editActions}>
+            <TouchableOpacity style={styles.editCancelBtn} onPress={() => setEditingWord(null)}>
+              <Text style={styles.editCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.editSaveBtn} onPress={handleSaveEdit} disabled={savingEdit}>
+              <Text style={styles.editSaveText}>{savingEdit ? 'Saving…' : 'Save'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#f2f4f8' },
+const themedStyles = (colors: ThemeColors) => StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.background },
   pager: { flex: 1 },
 
   header: {
@@ -538,14 +701,14 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 4,
   },
-  appName: { fontSize: 22, fontWeight: '800', color: '#111' },
-  settingsIcon: { fontSize: 22, color: '#888' },
+  appName: { fontSize: 22, fontWeight: '800', color: colors.text },
+  settingsIcon: { fontSize: 22, color: colors.textFaint },
 
   tabBar: {
     flexDirection: 'row',
     marginHorizontal: 16,
     marginBottom: 8,
-    backgroundColor: '#e8ecf0',
+    backgroundColor: colors.chipBg,
     borderRadius: 12,
     padding: 3,
   },
@@ -555,9 +718,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: 10,
   },
-  tabActive: { backgroundColor: '#fff', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, shadowOffset: { width: 0, height: 1 }, elevation: 2 },
-  tabText: { fontSize: 13, fontWeight: '600', color: '#888' },
-  tabTextActive: { color: '#111' },
+  tabActive: { backgroundColor: colors.surface, shadowColor: colors.shadow, shadowOpacity: 0.08, shadowRadius: 4, shadowOffset: { width: 0, height: 1 }, elevation: 2 },
+  tabText: { fontSize: 13, fontWeight: '600', color: colors.textFaint },
+  tabTextActive: { color: colors.text },
 
   // Pages
   pageContent: { padding: 16, paddingTop: 8 },
@@ -566,11 +729,11 @@ const styles = StyleSheet.create({
 
   // Translate page
   pasteCard: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderRadius: 16,
     padding: 16,
     marginBottom: 12,
-    shadowColor: '#000',
+    shadowColor: colors.shadow,
     shadowOpacity: 0.06,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
@@ -579,7 +742,7 @@ const styles = StyleSheet.create({
   cardLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#888',
+    color: colors.textFaint,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
     marginBottom: 10,
@@ -587,25 +750,25 @@ const styles = StyleSheet.create({
   urlPreview: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    backgroundColor: '#f7fbff',
+    backgroundColor: colors.accentSoft,
     borderRadius: 10,
     borderWidth: 1.5,
-    borderColor: '#4A90D9',
+    borderColor: colors.accent,
     padding: 12,
     marginBottom: 12,
     gap: 8,
   },
-  urlText: { flex: 1, fontSize: 14, color: '#333' },
-  urlPlaceholder: { fontSize: 14, color: '#bbb', marginBottom: 12 },
+  urlText: { flex: 1, fontSize: 14, color: colors.text },
+  urlPlaceholder: { fontSize: 14, color: colors.textFaint, marginBottom: 12 },
   clearBtn: { padding: 2 },
-  clearText: { fontSize: 14, color: '#bbb' },
+  clearText: { fontSize: 14, color: colors.textFaint },
   pasteBtn: {
-    backgroundColor: '#4A90D9',
+    backgroundColor: colors.accent,
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: 'center',
   },
-  pasteBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+  pasteBtnText: { fontSize: 15, fontWeight: '700', color: colors.accentText },
 
   langCard: {
     flexDirection: 'row',
@@ -614,14 +777,14 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   langCol: { flex: 1 },
-  arrow: { fontSize: 20, color: '#aaa', marginTop: 16 },
+  arrow: { fontSize: 20, color: colors.textFaint, marginTop: 16 },
 
   difficultyCard: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderRadius: 16,
     padding: 16,
     marginBottom: 12,
-    shadowColor: '#000',
+    shadowColor: colors.shadow,
     shadowOpacity: 0.06,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
@@ -636,46 +799,46 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 10,
     alignItems: 'center',
-    backgroundColor: '#f0f2f5',
+    backgroundColor: colors.surfaceAlt,
   },
   difficultyBtnActive: {
-    backgroundColor: '#4A90D9',
+    backgroundColor: colors.accent,
   },
   difficultyText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#666',
+    color: colors.textMuted,
   },
   difficultyTextActive: {
-    color: '#fff',
+    color: colors.accentText,
   },
   translateBtn: {
-    backgroundColor: '#4A90D9',
+    backgroundColor: colors.accent,
     borderRadius: 14,
     paddingVertical: 18,
     alignItems: 'center',
-    shadowColor: '#4A90D9',
+    shadowColor: colors.accent,
     shadowOpacity: 0.35,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
     elevation: 6,
   },
-  translateBtnText: { fontSize: 17, fontWeight: '800', color: '#fff', letterSpacing: 0.3 },
+  translateBtnText: { fontSize: 17, fontWeight: '800', color: colors.accentText, letterSpacing: 0.3 },
   loadingBox: { alignItems: 'center', paddingVertical: 28, gap: 14 },
-  loadingText: { fontSize: 15, color: '#555' },
+  loadingText: { fontSize: 15, color: colors.textMuted },
 
   // Articles page
   emptyState: { alignItems: 'center', gap: 8 },
   emptyIcon: { fontSize: 40 },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: '#333' },
-  emptySubtitle: { fontSize: 14, color: '#888', textAlign: 'center', lineHeight: 20 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
+  emptySubtitle: { fontSize: 14, color: colors.textFaint, textAlign: 'center', lineHeight: 20 },
 
   statsBanner: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderRadius: 14,
     padding: 16,
     marginBottom: 12,
-    shadowColor: '#000',
+    shadowColor: colors.shadow,
     shadowOpacity: 0.05,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
@@ -687,47 +850,63 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   statItem: { alignItems: 'center', flex: 1 },
-  statValue: { fontSize: 18, fontWeight: '800', color: '#111' },
-  statLabel: { fontSize: 11, color: '#888', marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
-  statDivider: { width: 1, height: 32, backgroundColor: '#eee' },
-  statsBreakdown: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
+  statValue: { fontSize: 18, fontWeight: '800', color: colors.text },
+  statLabel: { fontSize: 11, color: colors.textFaint, marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
+  costLinkBtn: {
     marginTop: 10,
     paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#eee',
-    gap: 6,
+    borderTopColor: colors.border,
+    alignItems: 'center',
   },
-  breakdownItem: { fontSize: 12, color: '#777' },
-  breakdownDot: { fontSize: 12, color: '#ccc' },
+  costLinkText: { fontSize: 13, fontWeight: '600', color: colors.accent },
 
   articleCard: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderRadius: 14,
     padding: 14,
     marginBottom: 10,
-    shadowColor: '#000',
+    shadowColor: colors.shadow,
     shadowOpacity: 0.05,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
     elevation: 2,
   },
   articleMeta: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
-  articleLang: { fontSize: 12, fontWeight: '700', color: '#4A90D9' },
-  articleDate: { fontSize: 12, color: '#aaa' },
-  articleUrl: { fontSize: 12, color: '#999', marginBottom: 6 },
-  articlePreview: { fontSize: 14, color: '#444', lineHeight: 20 },
-  articleCost: { fontSize: 11, color: '#aaa', marginTop: 6 },
+  articleLang: { fontSize: 12, fontWeight: '700', color: colors.accent },
+  articleDate: { fontSize: 12, color: colors.textFaint },
+  articleUrl: { fontSize: 12, color: colors.textFaint, marginBottom: 6 },
+  articlePreview: { fontSize: 14, color: colors.textMuted, lineHeight: 20 },
+  articleCost: { fontSize: 11, color: colors.textFaint, marginTop: 6 },
 
   // Vocab page
+  vocabSearchInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 14,
+    backgroundColor: colors.surface,
+    color: colors.text,
+    marginBottom: 12,
+  },
+  langFilterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  langFilterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: colors.chipBg,
+  },
+  langFilterChipActive: { backgroundColor: colors.accent },
+  langFilterText: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
+  langFilterTextActive: { color: colors.accentText },
   vocabCard: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderRadius: 14,
     padding: 14,
     marginBottom: 10,
-    shadowColor: '#000',
+    shadowColor: colors.shadow,
     shadowOpacity: 0.05,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
@@ -735,34 +914,37 @@ const styles = StyleSheet.create({
   },
   vocabHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 },
   vocabWordRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
-  vocabWord: { fontSize: 18, fontWeight: '700', color: '#111' },
+  vocabWord: { fontSize: 18, fontWeight: '700', color: colors.text },
   vocabPos: {
     fontSize: 12,
-    color: '#888',
+    color: colors.textFaint,
     fontStyle: 'italic',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: colors.surfaceAlt,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
   },
-  vocabRemove: { fontSize: 16, color: '#ccc', padding: 2 },
-  vocabDefinition: { fontSize: 14, color: '#444', lineHeight: 20 },
+  vocabCardActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  vocabSpeak: { fontSize: 15, padding: 2 },
+  vocabEdit: { fontSize: 15, color: colors.textFaint, padding: 2 },
+  vocabRemove: { fontSize: 16, color: colors.textFaint, padding: 2 },
+  vocabDefinition: { fontSize: 14, color: colors.textMuted, lineHeight: 20 },
   conjugationBox: {
     marginTop: 10,
-    backgroundColor: '#f7fbff',
+    backgroundColor: colors.accentSoft,
     borderRadius: 8,
     padding: 10,
     gap: 4,
   },
   vocabGender: {
-    fontSize: 12, color: '#4A90D9', fontStyle: 'italic',
-    backgroundColor: '#eef4fd', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
+    fontSize: 12, color: colors.accent, fontStyle: 'italic',
+    backgroundColor: colors.accentSoft, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
   },
   conjBtn: {
-    marginTop: 10, borderWidth: 1.5, borderColor: '#4A90D9',
+    marginTop: 10, borderWidth: 1.5, borderColor: colors.accent,
     borderRadius: 8, paddingVertical: 7, alignItems: 'center',
   },
-  conjBtnText: { fontSize: 13, fontWeight: '600', color: '#4A90D9' },
+  conjBtnText: { fontSize: 13, fontWeight: '600', color: colors.accent },
 
   // Regen loading overlay
   regenOverlay: {
@@ -777,7 +959,7 @@ const styles = StyleSheet.create({
   // Context menu
   menuBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
   menuSheet: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingBottom: 36,
@@ -785,22 +967,22 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   menuHandle: {
-    width: 40, height: 4, borderRadius: 2, backgroundColor: '#ddd',
+    width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border,
     alignSelf: 'center', marginBottom: 8,
   },
   menuItem: {
     paddingVertical: 16,
     paddingHorizontal: 24,
   },
-  menuItemText: { fontSize: 16, color: '#111' },
-  menuItemDestructive: { color: '#d9311a' },
-  menuDivider: { height: StyleSheet.hairlineWidth, backgroundColor: '#eee', marginHorizontal: 24 },
+  menuItemText: { fontSize: 16, color: colors.text },
+  menuItemDestructive: { color: colors.danger },
+  menuDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginHorizontal: 24 },
   menuSectionGap: { marginTop: 8 },
 
   // Vocab modal
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
   modalSheet: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingHorizontal: 20,
@@ -808,20 +990,43 @@ const styles = StyleSheet.create({
     paddingTop: 12,
   },
   modalHandle: {
-    width: 40, height: 4, borderRadius: 2, backgroundColor: '#ddd',
+    width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border,
     alignSelf: 'center', marginBottom: 16,
   },
-  modalTitle: { fontSize: 17, fontWeight: '700', color: '#111', marginBottom: 12 },
+  modalTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginBottom: 12 },
   modalList: { maxHeight: 420 },
   modalVocabItem: {
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#eee',
+    borderBottomColor: colors.border,
   },
-  modalEmpty: { fontSize: 14, color: '#aaa', textAlign: 'center', paddingVertical: 20 },
+  modalEmpty: { fontSize: 14, color: colors.textFaint, textAlign: 'center', paddingVertical: 20 },
   modalDoneBtn: {
-    marginTop: 16, backgroundColor: '#4A90D9', borderRadius: 12,
+    marginTop: 16, backgroundColor: colors.accent, borderRadius: 12,
     paddingVertical: 14, alignItems: 'center',
   },
-  modalDoneBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+  modalDoneBtnText: { fontSize: 15, fontWeight: '700', color: colors.accentText },
+
+  // Edit notecard modal
+  editLabel: {
+    fontSize: 11, fontWeight: '700', color: colors.textFaint, textTransform: 'uppercase',
+    letterSpacing: 0.6, marginTop: 14, marginBottom: 6,
+  },
+  editInput: {
+    borderWidth: 1, borderColor: colors.border, borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 10, fontSize: 15,
+    backgroundColor: colors.surfaceAlt, color: colors.text,
+  },
+  editInputMultiline: { minHeight: 70, textAlignVertical: 'top' },
+  editActions: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  editCancelBtn: {
+    flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center',
+    backgroundColor: colors.chipBg,
+  },
+  editCancelText: { fontSize: 15, fontWeight: '600', color: colors.textMuted },
+  editSaveBtn: {
+    flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center',
+    backgroundColor: colors.accent,
+  },
+  editSaveText: { fontSize: 15, fontWeight: '700', color: colors.accentText },
 });

@@ -2,11 +2,12 @@ import { getUserId } from './api';
 
 const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL ?? '').replace(/\/$/, '');
 
-export type CostSource = 'article' | 'article-regeneration' | 'vocab' | 'audio';
+export type CostSource = 'article' | 'article-regeneration' | 'vocab' | 'vocab_selection' | 'audio';
 
 export async function recordApiCost(params: {
   source: CostSource;
   model: string;
+  language?: string;
   inputCreditRate: number;
   totalInputCredits: number;
   outputCreditRate: number;
@@ -21,6 +22,7 @@ export async function recordApiCost(params: {
         user_id: userId,
         source: params.source,
         model: params.model,
+        language: params.language ?? null,
         input_credit_rate: params.inputCreditRate,
         total_input_credits: params.totalInputCredits,
         output_credit_rate: params.outputCreditRate,

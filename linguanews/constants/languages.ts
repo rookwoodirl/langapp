@@ -26,6 +26,14 @@ export const LANGUAGES: Language[] = [
 export const DEFAULT_SOURCE_LANGUAGE = 'en';
 export const DEFAULT_TARGET_LANGUAGE = 'es';
 
+// Languages with grammatical gender (and, accordingly, gendered definite articles).
+// Used to skip asking for gender/article on languages that don't have the concept (e.g. Chinese, Japanese, Korean, Turkish).
+export const GENDERED_LANGUAGES = new Set(['es', 'fr', 'de', 'it', 'pt', 'nl', 'ru', 'ar', 'hi', 'pl', 'sv']);
+
+export function isGenderedLanguage(code: string): boolean {
+  return GENDERED_LANGUAGES.has(code);
+}
+
 export function getLanguageName(code: string): string {
   return LANGUAGES.find((l) => l.code === code)?.name ?? code;
 }

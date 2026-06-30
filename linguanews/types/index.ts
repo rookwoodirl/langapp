@@ -11,6 +11,7 @@ export interface VocabWord {
   partOfSpeech?: string;
   gender?: string;
   article?: string;
+  infinitive?: string;
 }
 
 export interface Article {
@@ -30,7 +31,6 @@ export type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced';
 export interface UserSettings {
   sourceLanguage: LanguageCode;
   targetLanguage: LanguageCode;
-  apiKey: string;
   difficulty: DifficultyLevel;
 }
 

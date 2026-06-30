@@ -9,6 +9,8 @@ import {
   Pressable,
 } from 'react-native';
 import { LANGUAGES } from '../constants/languages';
+import { useColors } from '../hooks/useColors';
+import { ThemeColors } from '../constants/theme';
 
 interface Props {
   label: string;
@@ -19,6 +21,8 @@ interface Props {
 export default function LanguagePicker({ label, value, onChange }: Props) {
   const [open, setOpen] = useState(false);
   const selected = LANGUAGES.find((l) => l.code === value);
+  const colors = useColors();
+  const styles = themedStyles(colors);
 
   return (
     <View style={styles.container}>
@@ -54,28 +58,28 @@ export default function LanguagePicker({ label, value, onChange }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   container: { marginBottom: 12 },
-  label: { fontSize: 12, color: '#888', marginBottom: 4, textTransform: 'uppercase' },
+  label: { fontSize: 12, color: colors.textFaint, marginBottom: 4, textTransform: 'uppercase' },
   button: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: colors.border,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
   },
-  buttonText: { fontSize: 16, color: '#111' },
-  chevron: { fontSize: 14, color: '#888' },
+  buttonText: { fontSize: 16, color: colors.text },
+  chevron: { fontSize: 14, color: colors.textFaint },
   backdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.3)',
   },
   sheet: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingTop: 16,
@@ -86,7 +90,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
     marginBottom: 12,
-    color: '#111',
+    color: colors.text,
   },
   option: {
     flexDirection: 'row',
@@ -94,9 +98,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#eee',
+    borderBottomColor: colors.border,
   },
-  optionSelected: { backgroundColor: '#f0f8ff' },
-  optionText: { fontSize: 16, color: '#111' },
-  optionNative: { fontSize: 14, color: '#888' },
+  optionSelected: { backgroundColor: colors.accentSoft },
+  optionText: { fontSize: 16, color: colors.text },
+  optionNative: { fontSize: 14, color: colors.textFaint },
 });

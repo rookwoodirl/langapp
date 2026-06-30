@@ -114,6 +114,7 @@ async function migrate() {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS api_costs_user_id_idx ON api_costs (user_id, created_at DESC)`);
+  await pool.query(`ALTER TABLE api_costs ADD COLUMN IF NOT EXISTS language TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_vocab (
