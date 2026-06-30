@@ -29,6 +29,7 @@ import { generateRecommendedVocab } from '../services/vocab';
 import ConjugationModal from '../components/ConjugationModal';
 import { VerbConjugation } from '../types';
 import { useUsageStore } from '../store/usageStore';
+import { recordApiCost } from '../services/apiCosts';
 
 const DIFFICULTIES: DifficultyLevel[] = ['beginner', 'intermediate', 'advanced'];
 
@@ -51,6 +52,7 @@ export default function HomeScreen() {
   });
 
   const { fetchArticle, isLoading, loadingStep, error, currentArticle } = useArticle();
+  const pendingSourceRef = useRef<'article' | 'article-regeneration'>('article');
   const { savedArticles, loadSavedArticles, setCurrentArticle, deleteArticle } = useArticleStore();
   const { words: vocabWords, loadVocab, removeWord, addWord } = useVocabStore();
 
@@ -104,7 +106,14 @@ export default function HomeScreen() {
       Alert.alert('Paste a URL first', 'Tap the Paste button to load a link from your clipboard.');
       return;
     }
-    await fetchArticle(url.trim(), true, settings);
+    Alert.alert(
+      'Translate article?',
+      'This will send the article to Claude for translation. Estimated cost: max $1.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Translate', onPress: () => { const src = pendingSourceRef.current; pendingSourceRef.current = 'article'; fetchArticle(url.trim(), true, settings, src); } },
+      ]
+    );
   }
 
   async function handleGenerateVocab(article: Article) {
@@ -118,6 +127,14 @@ export default function HomeScreen() {
         articleText, article.targetLanguage, article.sourceLanguage, existing, apiKey
       );
       useUsageStore.getState().addVocab(result.inputTokens, result.outputTokens);
+      recordApiCost({
+        source: 'vocab',
+        model: 'claude-sonnet-4-6',
+        inputCreditRate: 3.0,
+        totalInputCredits: result.inputTokens,
+        outputCreditRate: 15.0,
+        totalOutputCredits: result.outputTokens,
+      });
       for (const word of result.words) {
         await addWord({ word: word.word, language: article.targetLanguage, definition: word.definition, partOfSpeech: word.partOfSpeech });
       }
@@ -134,6 +151,7 @@ export default function HomeScreen() {
       Alert.alert('No URL', 'This article was pasted as text and has no URL to re-translate from.');
       return;
     }
+    pendingSourceRef.current = 'article-regeneration';
     setUrl(article.sourceUrl);
     scrollToTab(0);
   }

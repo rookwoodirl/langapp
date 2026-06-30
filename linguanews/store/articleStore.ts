@@ -5,6 +5,11 @@ import { translateArticle } from '../services/translator';
 import { lookupWordDefinition, LookupResult } from '../services/vocab';
 import { apiSaveArticle, apiLoadArticles, apiDeleteArticle, apiClearArticles } from '../services/api';
 import { useUsageStore } from './usageStore';
+import { recordApiCost, CostSource } from '../services/apiCosts';
+
+// Claude Sonnet 4.6 rates ($/million tokens)
+const SONNET_IN = 3.0;
+const SONNET_OUT = 15.0;
 
 interface ArticleStore {
   currentArticle: Article | null;
@@ -17,7 +22,7 @@ interface ArticleStore {
   vocabInputTokens: number;
   vocabOutputTokens: number;
 
-  loadArticle: (input: string, isUrl: boolean, settings: UserSettings) => Promise<void>;
+  loadArticle: (input: string, isUrl: boolean, settings: UserSettings, source?: CostSource) => Promise<void>;
   lookupWord: (word: string, settings: UserSettings) => Promise<{ definition: string; partOfSpeech?: string; gender?: string; article?: string }>;
   toggleTTS: () => void;
   saveArticle: () => Promise<void>;
@@ -39,7 +44,7 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
   vocabInputTokens: 0,
   vocabOutputTokens: 0,
 
-  loadArticle: async (input, isUrl, settings) => {
+  loadArticle: async (input, isUrl, settings, source = 'article') => {
     set({ isLoading: true, error: null, wordLookupCache: {}, vocabInputTokens: 0, vocabOutputTokens: 0 });
 
     try {
@@ -79,6 +84,14 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
 
       set({ currentArticle: article, isLoading: false, loadingStep: 'Done' });
       useUsageStore.getState().addArticle(result.inputTokens, result.outputTokens);
+      recordApiCost({
+        source,
+        model: 'claude-sonnet-4-6',
+        inputCreditRate: SONNET_IN,
+        totalInputCredits: result.inputTokens,
+        outputCreditRate: SONNET_OUT,
+        totalOutputCredits: result.outputTokens,
+      });
     } catch (err) {
       set({
         isLoading: false,
@@ -110,6 +123,14 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
       vocabOutputTokens: vocabOutputTokens + result.outputTokens,
     });
     useUsageStore.getState().addVocab(result.inputTokens, result.outputTokens);
+    recordApiCost({
+      source: 'vocab',
+      model: 'claude-sonnet-4-6',
+      inputCreditRate: SONNET_IN,
+      totalInputCredits: result.inputTokens,
+      outputCreditRate: SONNET_OUT,
+      totalOutputCredits: result.outputTokens,
+    });
     return entry;
   },
 

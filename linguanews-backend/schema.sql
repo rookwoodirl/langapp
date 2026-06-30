@@ -17,3 +17,17 @@ CREATE TABLE IF NOT EXISTS articles (
 );
 
 CREATE INDEX IF NOT EXISTS articles_user_id_idx ON articles (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS api_costs (
+  id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id              TEXT        NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  source               TEXT        NOT NULL,
+  model                TEXT        NOT NULL,
+  input_credit_rate    NUMERIC     NOT NULL DEFAULT 0,
+  total_input_credits  INTEGER     NOT NULL DEFAULT 0,
+  output_credit_rate   NUMERIC     NOT NULL DEFAULT 0,
+  total_output_credits INTEGER     NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS api_costs_user_id_idx ON api_costs (user_id, created_at DESC);

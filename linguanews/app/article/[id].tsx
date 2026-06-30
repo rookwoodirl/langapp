@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,8 +13,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useArticleStore } from '../../store/articleStore';
 import { useVocabStore } from '../../store/vocabStore';
 import VocabPopup from '../../components/VocabPopup';
-import AudioPlayer from '../../components/AudioPlayer';
 import ParagraphCard from '../../components/ParagraphCard';
+import { ttsService } from '../../services/tts';
 import { getLanguageName } from '../../constants/languages';
 import { getVerbConjugation } from '../../services/vocab';
 import { calcCost, formatCost, formatTokens } from '../../utils/cost';
@@ -27,7 +27,7 @@ export default function ArticleScreen() {
   const cardWidth = width - 32;
 
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { currentArticle, savedArticles, lookupWord, saveArticle, vocabInputTokens, vocabOutputTokens } = useArticleStore();
+  const { currentArticle, savedArticles, lookupWord, saveArticle, vocabInputTokens, vocabOutputTokens, ttsPlaying, toggleTTS } = useArticleStore();
   const { addWord, words: vocabWords } = useVocabStore();
 
   const article = currentArticle?.id === id ? currentArticle : null;
@@ -40,7 +40,20 @@ export default function ArticleScreen() {
   );
 
   const [saving, setSaving] = useState(false);
+  const [audioReady, setAudioReady] = useState(false);
   const isSaved = savedArticles.some((a) => a.id === id);
+
+  useEffect(() => {
+    if (ttsPlaying) {
+      ttsService.speak(translatedText, article?.targetLanguage ?? 'en', () => {
+        useArticleStore.setState({ ttsPlaying: false });
+      });
+    } else {
+      ttsService.stop();
+    }
+  }, [ttsPlaying]);
+
+  useEffect(() => () => { ttsService.stop(); }, []);
 
   const [popupVisible, setPopupVisible] = useState(false);
   const [popupWord, setPopupWord] = useState('');
@@ -118,6 +131,25 @@ export default function ArticleScreen() {
     });
   }
 
+  function handleGenerateAudio() {
+    const wordCount = translatedText.split(/\s+/).filter(Boolean).length;
+    const estimate = (wordCount * 0.001).toFixed(2);
+    Alert.alert(
+      'Generate audio?',
+      `This will generate spoken audio for the article (~${wordCount} words). Estimated cost: $${estimate}.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Generate audio',
+          onPress: () => {
+            setAudioReady(true);
+            useArticleStore.setState({ ttsPlaying: true });
+          },
+        },
+      ]
+    );
+  }
+
   const fromName = getLanguageName(article.sourceLanguage);
   const toName = getLanguageName(article.targetLanguage);
   const cost = calcCost(article.inputTokens ?? 0, article.outputTokens ?? 0);
@@ -160,6 +192,15 @@ export default function ArticleScreen() {
         </View>
       )}
 
+      <TouchableOpacity
+        style={[styles.generateAudioBtn, audioReady && styles.generateAudioBtnActive]}
+        onPress={audioReady ? toggleTTS : handleGenerateAudio}
+      >
+        <Text style={[styles.generateAudioText, audioReady && styles.generateAudioTextActive]}>
+          {!audioReady ? '🔊 Generate audio' : ttsPlaying ? '⏹ Stop' : '▶ Read aloud'}
+        </Text>
+      </TouchableOpacity>
+
       <FlatList
         data={pairs}
         keyExtractor={(_, i) => String(i)}
@@ -174,8 +215,6 @@ export default function ArticleScreen() {
         contentContainerStyle={styles.listContent}
         style={styles.list}
       />
-
-      <AudioPlayer text={translatedText} language={article.targetLanguage} />
 
       <VocabPopup
         visible={popupVisible}
@@ -225,6 +264,23 @@ const styles = StyleSheet.create({
     borderBottomColor: '#eee',
   },
   costText: { fontSize: 12, color: '#aaa' },
+  generateAudioBtn: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 2,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#f0f6ff',
+    borderWidth: 1,
+    borderColor: '#c8ddf5',
+    alignItems: 'center',
+  },
+  generateAudioBtnActive: {
+    backgroundColor: '#4A90D9',
+    borderColor: '#4A90D9',
+  },
+  generateAudioText: { fontSize: 14, fontWeight: '600', color: '#4A90D9' },
+  generateAudioTextActive: { color: '#fff' },
   list: { flex: 1 },
   listContent: { padding: 16, paddingBottom: 120 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },

@@ -5,6 +5,7 @@ import { pool } from './db';
 import articlesRouter from './routes/articles';
 import vocabRouter from './routes/vocab';
 import scrapeRouter from './routes/scrape';
+import apiCostsRouter from './routes/api-costs';
 
 dotenv.config();
 
@@ -30,6 +31,7 @@ app.get('/dbcheck', async (_req, res) => {
 app.use('/articles', articlesRouter);
 app.use('/vocab', vocabRouter);
 app.use('/scrape', scrapeRouter);
+app.use('/api-costs', apiCostsRouter);
 
 async function migrate() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`);
@@ -51,12 +53,28 @@ async function migrate() {
   `);
 
   // Add columns to existing tables (no-op if already present)
-  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS input_tokens  INTEGER NOT NULL DEFAULT 0`);
-  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS output_tokens INTEGER NOT NULL DEFAULT 0`);
-  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS original_text TEXT`);
-  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS sentence_pairs JSONB NOT NULL DEFAULT '[]'`);
+  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS input_tokens         INTEGER NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS output_tokens        INTEGER NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS original_sentences   JSONB   NOT NULL DEFAULT '[]'`);
+  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS translated_sentences JSONB   NOT NULL DEFAULT '[]'`);
+  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS deleted              BOOLEAN NOT NULL DEFAULT false`);
   await pool.query(`ALTER TABLE vocab_words ADD COLUMN IF NOT EXISTS gender TEXT`);
   await pool.query(`ALTER TABLE vocab_words ADD COLUMN IF NOT EXISTS article TEXT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS api_costs (
+      id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id              TEXT        NOT NULL,
+      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      source               TEXT        NOT NULL,
+      model                TEXT        NOT NULL,
+      input_credit_rate    NUMERIC     NOT NULL DEFAULT 0,
+      total_input_credits  INTEGER     NOT NULL DEFAULT 0,
+      output_credit_rate   NUMERIC     NOT NULL DEFAULT 0,
+      total_output_credits INTEGER     NOT NULL DEFAULT 0
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS api_costs_user_id_idx ON api_costs (user_id, created_at DESC)`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vocab_words (
