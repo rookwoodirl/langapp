@@ -51,8 +51,6 @@ export default function VocabPopup({
     }
   }
 
-  const displayWord = article ? `${article} ${word}` : word;
-
   return (
     <>
       <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -60,8 +58,9 @@ export default function VocabPopup({
         <View style={styles.sheet}>
           <View style={styles.handle} />
           <View style={styles.header}>
-            <Text style={styles.word}>{displayWord}</Text>
+            <Text style={styles.word}>{word}</Text>
             <View style={styles.badges}>
+              {article ? <Text style={styles.article}>{article}</Text> : null}
               {partOfSpeech ? <Text style={styles.pos}>{partOfSpeech}</Text> : null}
               {gender ? <Text style={styles.gender}>{gender}</Text> : null}
             </View>
@@ -129,6 +128,10 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 },
   word: { fontSize: 22, fontWeight: '700', color: '#111', flex: 1 },
   badges: { flexDirection: 'row', gap: 6, flexShrink: 1, flexWrap: 'wrap' },
+  article: {
+    fontSize: 13, color: '#6b48a2', fontStyle: 'italic',
+    backgroundColor: '#f3eeff', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4,
+  },
   pos: {
     fontSize: 13, color: '#888', fontStyle: 'italic',
     backgroundColor: '#f5f5f5', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4,
