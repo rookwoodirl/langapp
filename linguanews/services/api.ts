@@ -101,6 +101,23 @@ export async function apiDeleteArticle(id: string): Promise<void> {
   }
 }
 
+export interface CostSummaryRow {
+  inputCredits: number;
+  outputCredits: number;
+  totalCost: number;
+}
+
+export async function apiGetCostSummary(): Promise<Record<string, CostSummaryRow>> {
+  try {
+    const userId = await getUserId();
+    const res = await fetch(`${BACKEND_URL}/api-costs/summary?user_id=${encodeURIComponent(userId)}`);
+    if (!res.ok) return {};
+    return (await parseJson(res)) as Record<string, CostSummaryRow>;
+  } catch {
+    return {};
+  }
+}
+
 export async function apiClearArticles(): Promise<void> {
   const userId = await getUserId();
   await fetch(`${BACKEND_URL}/articles?user_id=${encodeURIComponent(userId)}`, {

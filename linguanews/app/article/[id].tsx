@@ -103,6 +103,7 @@ export default function ArticleScreen() {
         if (result.partOfSpeech) setPopupPos(result.partOfSpeech);
         if (result.gender) setPopupGender(result.gender);
         if (result.article) setPopupArticle(result.article);
+        if (result.infinitive) setPopupWord(result.infinitive);
       } catch (err) {
         setPopupDefinition('Could not load definition.');
         Alert.alert('Lookup failed', err instanceof Error ? err.message : String(err));

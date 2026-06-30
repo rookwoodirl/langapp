@@ -5,11 +5,7 @@ import { translateArticle } from '../services/translator';
 import { lookupWordDefinition, LookupResult } from '../services/vocab';
 import { apiSaveArticle, apiLoadArticles, apiLoadArticle, apiDeleteArticle, apiClearArticles } from '../services/api';
 import { useUsageStore } from './usageStore';
-import { recordApiCost, CostSource } from '../services/apiCosts';
-
-// Claude Sonnet 4.6 rates ($/million tokens)
-const SONNET_IN = 3.0;
-const SONNET_OUT = 15.0;
+import { CostSource } from '../services/apiCosts';
 
 interface ArticleStore {
   currentArticle: Article | null;
@@ -18,12 +14,12 @@ interface ArticleStore {
   error: string | null;
   savedArticles: Article[];
   ttsPlaying: boolean;
-  wordLookupCache: Record<string, { definition: string; partOfSpeech?: string; gender?: string; article?: string }>;
+  wordLookupCache: Record<string, { definition: string; partOfSpeech?: string; gender?: string; article?: string; infinitive?: string }>;
   vocabInputTokens: number;
   vocabOutputTokens: number;
 
   loadArticle: (input: string, isUrl: boolean, settings: UserSettings, source?: CostSource) => Promise<void>;
-  lookupWord: (word: string, settings: UserSettings) => Promise<{ definition: string; partOfSpeech?: string; gender?: string; article?: string }>;
+  lookupWord: (word: string, settings: UserSettings) => Promise<{ definition: string; partOfSpeech?: string; gender?: string; article?: string; infinitive?: string }>;
   toggleTTS: () => void;
   saveArticle: () => Promise<string | undefined>;
   loadArticleById: (id: string) => Promise<void>;
@@ -68,7 +64,8 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
         settings.sourceLanguage,
         settings.targetLanguage,
         apiKey,
-        settings.difficulty ?? 'intermediate'
+        settings.difficulty ?? 'intermediate',
+        source,
       );
 
       const article: Article = {
@@ -85,14 +82,6 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
 
       set({ currentArticle: article, isLoading: false, loadingStep: 'Done' });
       useUsageStore.getState().addArticle(result.inputTokens, result.outputTokens);
-      recordApiCost({
-        source,
-        model: 'claude-sonnet-4-6',
-        inputCreditRate: SONNET_IN,
-        totalInputCredits: result.inputTokens,
-        outputCreditRate: SONNET_OUT,
-        totalOutputCredits: result.outputTokens,
-      });
     } catch (err) {
       set({
         isLoading: false,
@@ -117,21 +106,13 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
     );
 
     const { vocabInputTokens, vocabOutputTokens } = get();
-    const entry = { definition: result.definition, partOfSpeech: result.partOfSpeech, gender: result.gender, article: result.article };
+    const entry = { definition: result.definition, partOfSpeech: result.partOfSpeech, gender: result.gender, article: result.article, infinitive: result.infinitive };
     set({
       wordLookupCache: { ...cache, [word]: entry },
       vocabInputTokens: vocabInputTokens + result.inputTokens,
       vocabOutputTokens: vocabOutputTokens + result.outputTokens,
     });
     useUsageStore.getState().addVocab(result.inputTokens, result.outputTokens);
-    recordApiCost({
-      source: 'vocab',
-      model: 'claude-sonnet-4-6',
-      inputCreditRate: SONNET_IN,
-      totalInputCredits: result.inputTokens,
-      outputCreditRate: SONNET_OUT,
-      totalOutputCredits: result.outputTokens,
-    });
     return entry;
   },
 

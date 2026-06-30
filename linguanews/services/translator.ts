@@ -1,5 +1,6 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { VocabWord, SentencePair } from '../types';
+import { CostSource } from './apiCosts';
+import { callLLM } from './llm';
 
 export interface TranslationResult {
   translation: string;
@@ -7,14 +8,6 @@ export interface TranslationResult {
   vocab: VocabWord[];
   inputTokens: number;
   outputTokens: number;
-}
-
-// Claude Sonnet 4.6 pricing (per million tokens)
-const INPUT_COST_PER_M = 3.0;
-const OUTPUT_COST_PER_M = 15.0;
-
-export function calcCost(inputTokens: number, outputTokens: number): number {
-  return (inputTokens / 1_000_000) * INPUT_COST_PER_M + (outputTokens / 1_000_000) * OUTPUT_COST_PER_M;
 }
 
 const DIFFICULTY_INSTRUCTIONS: Record<string, string> = {
@@ -58,58 +51,49 @@ function extractJson(raw: string): string {
   return raw.trim();
 }
 
-async function callClaude(
-  client: Anthropic,
-  systemPrompt: string,
-  userMessage: string
-): Promise<{ json: string; inputTokens: number; outputTokens: number }> {
-  const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 32768,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userMessage }],
-  });
-
-  const content = message.content[0];
-  if (content.type !== 'text') throw new Error('Unexpected response type from Claude');
-  return {
-    json: extractJson(content.text),
-    inputTokens: message.usage.input_tokens,
-    outputTokens: message.usage.output_tokens,
-  };
-}
-
 export async function translateArticle(
   text: string,
   sourceLanguage: string,
   targetLanguage: string,
   apiKey: string,
-  difficulty = 'intermediate'
+  difficulty = 'intermediate',
+  source: CostSource = 'article',
 ): Promise<TranslationResult> {
   if (!apiKey) throw new Error('No API key set. Add your Anthropic API key in Settings.');
 
-  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-  const systemPrompt = buildSystemPrompt(sourceLanguage, targetLanguage, difficulty);
-
-  // Claude Sonnet 4.6 has a 200K token context window; 40K chars ≈ 10K words
+  const system = buildSystemPrompt(sourceLanguage, targetLanguage, difficulty);
   const truncated = text.length > 40000 ? text.slice(0, 40000) + '…' : text;
 
-  let result = await callClaude(client, systemPrompt, truncated);
+  let result = await callLLM({
+    source,
+    apiKey,
+    model: 'claude-sonnet-4-6',
+    maxTokens: 32768,
+    system,
+    messages: [{ role: 'user', content: truncated }],
+  });
   let totalInput = result.inputTokens;
   let totalOutput = result.outputTokens;
 
   let parsed: { sentences: SentencePair[]; vocab: VocabWord[] };
   try {
-    parsed = JSON.parse(result.json);
+    parsed = JSON.parse(extractJson(result.text));
   } catch {
-    result = await callClaude(
-      client,
-      systemPrompt,
-      `The previous response was not valid JSON. Please return only valid JSON.\n\nOriginal text:\n${truncated}`
-    );
+    result = await callLLM({
+      source,
+      apiKey,
+      model: 'claude-sonnet-4-6',
+      maxTokens: 32768,
+      system,
+      messages: [
+        { role: 'user', content: truncated },
+        { role: 'assistant', content: result.text },
+        { role: 'user', content: 'The previous response was not valid JSON. Please return only valid JSON.' },
+      ],
+    });
     totalInput += result.inputTokens;
     totalOutput += result.outputTokens;
-    parsed = JSON.parse(result.json);
+    parsed = JSON.parse(extractJson(result.text));
   }
 
   if (!Array.isArray(parsed.sentences) || !Array.isArray(parsed.vocab)) {

@@ -85,6 +85,18 @@ async function migrate() {
   await pool.query(`ALTER TABLE articles DROP COLUMN IF EXISTS original_text`);
   await pool.query(`ALTER TABLE articles DROP COLUMN IF EXISTS sentence_pairs`);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vocab_words (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      word            TEXT        NOT NULL,
+      language        TEXT        NOT NULL,
+      definition      TEXT        NOT NULL,
+      part_of_speech  TEXT,
+      conjugation     JSONB,
+      UNIQUE(word, language)
+    )
+  `);
+
   await pool.query(`ALTER TABLE vocab_words ADD COLUMN IF NOT EXISTS gender TEXT`);
   await pool.query(`ALTER TABLE vocab_words ADD COLUMN IF NOT EXISTS article TEXT`);
 
@@ -102,18 +114,6 @@ async function migrate() {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS api_costs_user_id_idx ON api_costs (user_id, created_at DESC)`);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS vocab_words (
-      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      word            TEXT        NOT NULL,
-      language        TEXT        NOT NULL,
-      definition      TEXT        NOT NULL,
-      part_of_speech  TEXT,
-      conjugation     JSONB,
-      UNIQUE(word, language)
-    )
-  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_vocab (

@@ -1,11 +1,12 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { VerbConjugation } from '../types';
+import { VocabWord, VerbConjugation } from '../types';
+import { callLLM } from './llm';
 
 export interface LookupResult {
   definition: string;
   partOfSpeech?: string;
   gender?: string;
   article?: string;
+  infinitive?: string;
   inputTokens: number;
   outputTokens: number;
 }
@@ -25,42 +26,38 @@ export async function lookupWordDefinition(
   apiKey: string,
   articleContext?: string
 ): Promise<LookupResult> {
-  if (!apiKey) throw new Error('No API key set.');
-
-  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-
   const contextSnippet = articleContext ? extractContext(articleContext, word) : '';
+  const contextLine = contextSnippet ? `The word appears in this passage: "${contextSnippet}"\n\n` : '';
 
-  const contextLine = contextSnippet
-    ? `The word appears in this passage: "${contextSnippet}"\n\n`
-    : '';
+  const system =
+    `You are a bilingual translation dictionary. A ${sourceLanguage} speaker is learning ${targetLanguage}. ` +
+    `${contextLine}` +
+    `Given a ${targetLanguage} word or phrase, return a JSON dictionary entry with these keys:\n` +
+    `- "definition": concise definition in ${sourceLanguage}, as a translation dictionary would write it. ` +
+    `For verbs and verb phrases (including conjugated forms), convert to the infinitive and begin with "to <infinitive in ${sourceLanguage}>" (e.g. "to run", "to have eaten"). ` +
+    `For nouns, use a short noun phrase.\n` +
+    `- "partOfSpeech": grammatical category (noun, verb, adjective, adverb, phrase, etc.)\n` +
+    `- "infinitive": for verbs and verb phrases only — the infinitive/base form in ${targetLanguage} (e.g. "laufen", "être", "haber comido"); omit for non-verbs\n` +
+    `- "gender": for nouns only — "masculine", "feminine", "neuter", or "common"; omit for all other parts of speech\n` +
+    `- "article": for nouns only — the definite article in ${targetLanguage} (e.g. "der", "la", "the"); omit for all other parts of speech\n` +
+    `Respond with raw JSON only. No markdown, no code fences, no preamble.`;
 
-  const message = await client.messages.create({
+  const result = await callLLM({
+    source: 'vocab',
+    apiKey,
     model: 'claude-sonnet-4-6',
-    max_tokens: 256,
-    system:
-      `You are a bilingual translation dictionary. A ${sourceLanguage} speaker is learning ${targetLanguage}. ` +
-      `${contextLine}` +
-      `Given a ${targetLanguage} word, return a JSON dictionary entry with these keys:\n` +
-      `- "definition": concise definition in ${sourceLanguage}, as a translation dictionary would write it. ` +
-      `For verbs, always begin with "to" (e.g. "to run", "to eat"). ` +
-      `For nouns, use a short noun phrase.\n` +
-      `- "partOfSpeech": grammatical category (noun, verb, adjective, etc.)\n` +
-      `- "gender": for nouns only — "masculine", "feminine", "neuter", or "common"; omit for all other parts of speech\n` +
-      `- "article": for nouns only — the definite article in ${targetLanguage} (e.g. "der", "la", "the"); omit for all other parts of speech\n` +
-      `Respond with raw JSON only. No markdown, no code fences, no preamble.`,
-    messages: [{ role: 'user', content: `${targetLanguage} word: "${word}"` }],
+    maxTokens: 256,
+    system,
+    messages: [{ role: 'user', content: `${targetLanguage} word or phrase: "${word}"` }],
   });
 
-  const content = message.content[0];
-  if (content.type !== 'text') throw new Error('Unexpected response type');
-
-  let definition = content.text;
+  let definition = result.text;
   let partOfSpeech: string | undefined;
   let gender: string | undefined;
   let article: string | undefined;
+  let infinitive: string | undefined;
   try {
-    const raw = content.text.trim();
+    const raw = result.text.trim();
     const start = raw.indexOf('{');
     const end = raw.lastIndexOf('}');
     const parsed = JSON.parse(raw.slice(start, end + 1)) as {
@@ -68,11 +65,13 @@ export async function lookupWordDefinition(
       partOfSpeech?: string;
       gender?: string;
       article?: string;
+      infinitive?: string;
     };
     definition = parsed.definition;
     partOfSpeech = parsed.partOfSpeech;
     gender = parsed.gender;
     article = parsed.article;
+    infinitive = parsed.infinitive;
   } catch {
     // fall back to raw text if JSON parse fails
   }
@@ -82,8 +81,9 @@ export async function lookupWordDefinition(
     partOfSpeech,
     gender,
     article,
-    inputTokens: message.usage.input_tokens,
-    outputTokens: message.usage.output_tokens,
+    infinitive,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
   };
 }
 
@@ -94,16 +94,15 @@ export async function generateRecommendedVocab(
   existingWords: string[],
   apiKey: string
 ): Promise<{ words: VocabWord[]; inputTokens: number; outputTokens: number }> {
-  if (!apiKey) throw new Error('No API key set.');
-
-  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
   const knownStr = existingWords.length
     ? ` Do not include words the learner already knows: ${existingWords.slice(0, 80).join(', ')}.`
     : '';
 
-  const message = await client.messages.create({
+  const result = await callLLM({
+    source: 'vocab',
+    apiKey,
     model: 'claude-sonnet-4-6',
-    max_tokens: 1024,
+    maxTokens: 1024,
     system:
       `You are a language learning assistant helping a ${sourceLanguage} speaker learn ${targetLanguage}. ` +
       `Identify the most useful vocabulary words from the given text for the learner to study.${knownStr}`,
@@ -119,15 +118,13 @@ export async function generateRecommendedVocab(
     ],
   });
 
-  const content = message.content[0];
-  if (content.type !== 'text') throw new Error('Unexpected response');
-  const raw = content.text.trim();
+  const raw = result.text.trim();
   const start = raw.indexOf('[');
   const end = raw.lastIndexOf(']');
   if (start === -1 || end === -1) throw new Error('Could not parse vocab list from response.');
   const words = JSON.parse(raw.slice(start, end + 1)) as VocabWord[];
 
-  return { words, inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens };
+  return { words, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 
 export async function getVerbConjugation(
@@ -137,10 +134,11 @@ export async function getVerbConjugation(
 ): Promise<VerbConjugation | null> {
   if (!apiKey) return null;
   try {
-    const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-    const message = await client.messages.create({
+    const result = await callLLM({
+      source: 'vocab',
+      apiKey,
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 512,
+      maxTokens: 512,
       messages: [
         {
           role: 'user',
@@ -152,9 +150,8 @@ export async function getVerbConjugation(
         },
       ],
     });
-    const text = message.content[0];
-    if (text.type !== 'text') return null;
-    const raw = text.text.trim();
+
+    const raw = result.text.trim();
     const start = raw.indexOf('{');
     const end = raw.lastIndexOf('}');
     if (start === -1 || end === -1) return null;

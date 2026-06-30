@@ -29,7 +29,7 @@ import { generateRecommendedVocab } from '../services/vocab';
 import ConjugationModal from '../components/ConjugationModal';
 import { VerbConjugation } from '../types';
 import { useUsageStore } from '../store/usageStore';
-import { recordApiCost } from '../services/apiCosts';
+import { apiGetCostSummary, CostSummaryRow } from '../services/api';
 
 const DIFFICULTIES: DifficultyLevel[] = ['beginner', 'intermediate', 'advanced'];
 
@@ -56,18 +56,34 @@ export default function HomeScreen() {
   const { savedArticles, loadSavedArticles, setCurrentArticle, deleteArticle } = useArticleStore();
   const { words: vocabWords, loadVocab, removeWord, addWord } = useVocabStore();
 
-  const { article: articleUsage, vocab: vocabUsage, audio: audioUsage, load: loadUsage } = useUsageStore();
+  const { load: loadUsage } = useUsageStore();
+
+  const [costSummary, setCostSummary] = useState<Record<string, CostSummaryRow>>({});
+
+  const SOURCE_ORDER = ['article', 'article-regeneration', 'vocab', 'audio'] as const;
+  const SOURCE_LABELS: Record<string, string> = {
+    'article': 'Translations',
+    'article-regeneration': 'Re-translations',
+    'vocab': 'Vocab',
+    'audio': 'Audio',
+  };
 
   const [vocabModalArticle, setVocabModalArticle] = useState<Article | null>(null);
   const [contextMenu, setContextMenu] = useState<Article | null>(null);
   const [regenLoading, setRegenLoading] = useState(false);
   const [conjModal, setConjModal] = useState<{ infinitive: string; conjugation: VerbConjugation } | null>(null);
 
+  async function loadCostSummary() {
+    const summary = await apiGetCostSummary();
+    setCostSummary(summary);
+  }
+
   useEffect(() => {
     AsyncStorage.getItem(SETTINGS_KEY).then((raw) => {
       if (raw) setSettings(JSON.parse(raw));
     });
     loadUsage();
+    loadCostSummary();
   }, []);
 
   useEffect(() => {
@@ -82,7 +98,7 @@ export default function HomeScreen() {
 
   // Load data when switching tabs
   useEffect(() => {
-    if (activeTab === 1) loadSavedArticles();
+    if (activeTab === 1) { loadSavedArticles(); loadCostSummary(); }
     if (activeTab === 2) loadVocab();
   }, [activeTab]);
 
@@ -130,14 +146,6 @@ export default function HomeScreen() {
         articleText, article.targetLanguage, article.sourceLanguage, existing, apiKey
       );
       useUsageStore.getState().addVocab(result.inputTokens, result.outputTokens);
-      recordApiCost({
-        source: 'vocab',
-        model: 'claude-sonnet-4-6',
-        inputCreditRate: 3.0,
-        totalInputCredits: result.inputTokens,
-        outputCreditRate: 15.0,
-        totalOutputCredits: result.outputTokens,
-      });
       const settled = await Promise.allSettled(
         result.words.map((word) =>
           addWord({ word: word.word, language: article.targetLanguage, definition: word.definition, partOfSpeech: word.partOfSpeech })
@@ -273,10 +281,8 @@ export default function HomeScreen() {
   );
 
   // ── Articles page ───────────────────────────────────────────────────────────
-  const articleCost = calcCost(articleUsage.input, articleUsage.output);
-  const vocabCost = calcCost(vocabUsage.input, vocabUsage.output);
-  const audioCost = calcCost(audioUsage.input, audioUsage.output);
-  const lifetimeCost = articleCost + vocabCost + audioCost;
+  const lifetimeCost = Object.values(costSummary).reduce((sum, row) => sum + row.totalCost, 0);
+  const breakdownItems = SOURCE_ORDER.filter((src) => (costSummary[src]?.totalCost ?? 0) > 0);
 
   const articlesPage = (
     <FlatList
@@ -297,17 +303,16 @@ export default function HomeScreen() {
               <Text style={styles.statLabel}>lifetime total</Text>
             </View>
           </View>
-          {lifetimeCost > 0 && (
+          {breakdownItems.length > 0 && (
             <View style={styles.statsBreakdown}>
-              <Text style={styles.breakdownItem}>Articles {formatCost(articleCost)}</Text>
-              <Text style={styles.breakdownDot}>·</Text>
-              <Text style={styles.breakdownItem}>Vocab {formatCost(vocabCost)}</Text>
-              {audioCost > 0 && (
-                <>
-                  <Text style={styles.breakdownDot}>·</Text>
-                  <Text style={styles.breakdownItem}>Audio {formatCost(audioCost)}</Text>
-                </>
-              )}
+              {breakdownItems.map((src, i) => (
+                <React.Fragment key={src}>
+                  {i > 0 && <Text style={styles.breakdownDot}>·</Text>}
+                  <Text style={styles.breakdownItem}>
+                    {SOURCE_LABELS[src]} {formatCost(costSummary[src].totalCost)}
+                  </Text>
+                </React.Fragment>
+              ))}
             </View>
           )}
         </View>
