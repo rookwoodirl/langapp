@@ -46,6 +46,10 @@ export const useVocabStore = create<VocabStore>((set, get) => ({
       article: params.article,
       conjugation: params.conjugation,
       addedAt: Date.now(),
+      dueAt: Date.now(),
+      intervalDays: 0,
+      easeFactor: 2.5,
+      repetitions: 0,
     };
     set({ words: [optimistic, ...get().words] });
     // Reload to get real IDs

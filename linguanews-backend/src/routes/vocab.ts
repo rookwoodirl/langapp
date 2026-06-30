@@ -60,7 +60,8 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const result = await pool.query(
       `SELECT uv.id, uv.added_at, vw.id AS vocab_word_id,
-              vw.word, vw.language, vw.definition, vw.part_of_speech, vw.gender, vw.article, vw.conjugation
+              vw.word, vw.language, vw.definition, vw.part_of_speech, vw.gender, vw.article, vw.conjugation,
+              uv.due_at, uv.interval_days, uv.ease_factor, uv.repetitions, uv.last_reviewed_at
        FROM user_vocab uv
        JOIN vocab_words vw ON vw.id = uv.vocab_word_id
        WHERE uv.user_id = $1

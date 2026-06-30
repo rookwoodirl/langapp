@@ -21,24 +21,34 @@ import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useArticle } from '../hooks/useArticle';
 import LanguagePicker from '../components/LanguagePicker';
-import { UserSettings, Article, UserVocabWord, DifficultyLevel } from '../types';
+import { UserSettings, Article, UserVocabWord, DifficultyLevel, NotecardList } from '../types';
 import { DEFAULT_SOURCE_LANGUAGE, DEFAULT_TARGET_LANGUAGE, getLanguageName } from '../constants/languages';
 import { useArticleStore } from '../store/articleStore';
 import { useVocabStore } from '../store/vocabStore';
+import { useNotecardStore } from '../store/notecardStore';
 import { calcCost, formatCost, formatTokens } from '../utils/cost';
 import { selectVocabWords, lookupWordDefinition, getVerbConjugation } from '../services/vocab';
 import ConjugationModal from '../components/ConjugationModal';
 import { VerbConjugation } from '../types';
 import { useUsageStore } from '../store/usageStore';
 import { ttsService } from '../services/tts';
+import { exportNotecardsToAnki } from '../services/ankiExport';
+import { apiGetNotecardListItems, apiGetCostEvents, CostEvent } from '../services/api';
 import { useColors } from '../hooks/useColors';
 import { ThemeColors } from '../constants/theme';
+import { SOURCE_ORDER, SOURCE_LABELS } from '../constants/costs';
 
 const DIFFICULTIES: DifficultyLevel[] = ['beginner', 'intermediate', 'advanced'];
 
 const SETTINGS_KEY = '@linguanews/settings';
 
-const TABS = ['Translate', 'Articles', 'Vocab'] as const;
+const TABS = ['Translate', 'Articles', 'Vocab', 'Review', 'Cost'] as const;
+const COST_TIME_RANGES = [
+  { label: '7d', days: 7 },
+  { label: '30d', days: 30 },
+  { label: '90d', days: 90 },
+  { label: 'All time', days: null },
+] as const;
 type Tab = (typeof TABS)[number];
 
 export default function HomeScreen() {
@@ -59,6 +69,7 @@ export default function HomeScreen() {
   const pendingSourceRef = useRef<'article' | 'article-regeneration'>('article');
   const { savedArticles, loadSavedArticles, setCurrentArticle, deleteArticle } = useArticleStore();
   const { words: vocabWords, loadVocab, removeWord, addWord, updateWord } = useVocabStore();
+  const { lists, loadLists, createList, updateList, deleteList, addToList } = useNotecardStore();
 
   const { load: loadUsage } = useUsageStore();
 
@@ -71,6 +82,96 @@ export default function HomeScreen() {
   const [editingWord, setEditingWord] = useState<UserVocabWord | null>(null);
   const [editForm, setEditForm] = useState({ word: '', definition: '', partOfSpeech: '', gender: '', article: '' });
   const [savingEdit, setSavingEdit] = useState(false);
+  const [reviewLangFilter, setReviewLangFilter] = useState<string | null>(null);
+  const [pickerWord, setPickerWord] = useState<UserVocabWord | null>(null);
+  const [listModal, setListModal] = useState<{ mode: 'create' | 'rename'; list?: NotecardList } | null>(null);
+  const [listForm, setListForm] = useState({ name: '', language: '' });
+  const [pendingAddWord, setPendingAddWord] = useState<UserVocabWord | null>(null);
+  const [savingList, setSavingList] = useState(false);
+  const [costEvents, setCostEvents] = useState<CostEvent[]>([]);
+  const [costRangeIndex, setCostRangeIndex] = useState(3); // "All time"
+  const [costSourceFilter, setCostSourceFilter] = useState<string | null>(null);
+
+  async function loadCostEvents() {
+    const days = COST_TIME_RANGES[costRangeIndex].days;
+    const since = days != null ? new Date(Date.now() - days * 24 * 60 * 60 * 1000) : undefined;
+    const events = await apiGetCostEvents({ since, source: costSourceFilter ?? undefined });
+    setCostEvents(events);
+  }
+
+  function openCreateList(prefillLanguage?: string) {
+    setPendingAddWord(null);
+    setListModal({ mode: 'create' });
+    setListForm({ name: '', language: prefillLanguage ?? '' });
+  }
+
+  function openCreateListFromPicker() {
+    setPendingAddWord(pickerWord);
+    setListModal({ mode: 'create' });
+    setListForm({ name: '', language: pickerWord?.language ?? '' });
+  }
+
+  function openRenameList(list: NotecardList) {
+    setPendingAddWord(null);
+    setListModal({ mode: 'rename', list });
+    setListForm({ name: list.name, language: list.language ?? '' });
+  }
+
+  async function handleSaveList() {
+    if (!listModal) return;
+    const name = listForm.name.trim();
+    if (!name) { Alert.alert('Name required', 'Give the list a name.'); return; }
+    setSavingList(true);
+    try {
+      const language = listForm.language.trim() || undefined;
+      if (listModal.mode === 'create') {
+        await createList(name, language);
+        if (pendingAddWord) {
+          const created = useNotecardStore.getState().lists.find((l) => l.name === name);
+          if (created) await addToList(created.id, pendingAddWord.id);
+          setPendingAddWord(null);
+          setPickerWord(null);
+        }
+      } else if (listModal.list) {
+        await updateList(listModal.list.id, { name, language });
+      }
+      setListModal(null);
+    } catch (err) {
+      Alert.alert('Error', err instanceof Error ? err.message : 'Failed to save list.');
+    } finally {
+      setSavingList(false);
+    }
+  }
+
+  function handleDeleteList(list: NotecardList) {
+    Alert.alert('Delete list?', `"${list.name}" will be removed. The words themselves stay in your vocab.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => deleteList(list.id) },
+    ]);
+  }
+
+  async function handleAddToList(listId: string) {
+    if (!pickerWord) return;
+    await addToList(listId, pickerWord.id);
+    setPickerWord(null);
+  }
+
+  async function handleExportToAnki(words: UserVocabWord[]) {
+    try {
+      await exportNotecardsToAnki(words);
+    } catch (err) {
+      Alert.alert('Export failed', err instanceof Error ? err.message : 'Could not export to Anki.');
+    }
+  }
+
+  async function handleExportList(list: NotecardList) {
+    try {
+      const items = await apiGetNotecardListItems(list.id);
+      await exportNotecardsToAnki(items, `${list.name.replace(/[^\w-]+/g, '_')}.txt`);
+    } catch (err) {
+      Alert.alert('Export failed', err instanceof Error ? err.message : 'Could not export to Anki.');
+    }
+  }
 
   function openEditModal(word: UserVocabWord) {
     setEditingWord(word);
@@ -123,7 +224,14 @@ export default function HomeScreen() {
   useEffect(() => {
     if (activeTab === 1) loadSavedArticles();
     if (activeTab === 2) loadVocab();
+    if (activeTab === 3) loadLists();
+    if (activeTab === 4) loadCostEvents();
   }, [activeTab]);
+
+  // Refetch cost events when their filters change (while on the Cost tab)
+  useEffect(() => {
+    if (activeTab === 4) loadCostEvents();
+  }, [costRangeIndex, costSourceFilter]);
 
   async function updateSetting<K extends keyof UserSettings>(key: K, val: UserSettings[K]) {
     const updated = { ...settings, [key]: val };
@@ -347,19 +455,6 @@ export default function HomeScreen() {
       contentContainerStyle={savedArticles.length === 0 ? styles.emptyContainer : styles.listContent}
       data={savedArticles}
       keyExtractor={(a) => a.id}
-      ListHeaderComponent={
-        <View style={styles.statsBanner}>
-          <View style={styles.statsTopRow}>
-            <View style={styles.statItem}>
-              <Text style={styles.statValue}>{savedArticles.length}</Text>
-              <Text style={styles.statLabel}>saved</Text>
-            </View>
-          </View>
-          <TouchableOpacity style={styles.costLinkBtn} onPress={() => router.push('/costs')}>
-            <Text style={styles.costLinkText}>View cost analysis →</Text>
-          </TouchableOpacity>
-        </View>
-      }
       ListEmptyComponent={
         <View style={styles.emptyState}>
           <Text style={styles.emptyIcon}>📰</Text>
@@ -446,6 +541,11 @@ export default function HomeScreen() {
               ))}
             </View>
           )}
+          {filteredVocabWords.length > 0 && (
+            <TouchableOpacity style={styles.exportBtn} onPress={() => handleExportToAnki(filteredVocabWords)}>
+              <Text style={styles.exportBtnText}>Export to Anki ({filteredVocabWords.length})</Text>
+            </TouchableOpacity>
+          )}
         </View>
       }
       ListEmptyComponent={
@@ -475,6 +575,9 @@ export default function HomeScreen() {
               <TouchableOpacity onPress={() => ttsService.speak(item.word, item.language)} hitSlop={8}>
                 <Text style={styles.vocabSpeak}>🔊</Text>
               </TouchableOpacity>
+              <TouchableOpacity onPress={() => setPickerWord(item)} hitSlop={8}>
+                <Text style={styles.vocabEdit}>📋</Text>
+              </TouchableOpacity>
               <TouchableOpacity onPress={() => openEditModal(item)} hitSlop={8}>
                 <Text style={styles.vocabEdit}>✎</Text>
               </TouchableOpacity>
@@ -492,6 +595,184 @@ export default function HomeScreen() {
               <Text style={styles.conjBtnText}>Conjugations</Text>
             </TouchableOpacity>
           )}
+        </View>
+      )}
+    />
+  );
+
+  // ── Review page ─────────────────────────────────────────────────────────────
+  const reviewPage = (
+    <FlatList
+      style={{ width }}
+      nestedScrollEnabled
+      contentContainerStyle={lists.length === 0 ? styles.emptyContainer : styles.listContent}
+      data={lists}
+      keyExtractor={(l) => l.id}
+      ListHeaderComponent={
+        <View>
+          <TouchableOpacity
+            style={styles.reviewCta}
+            onPress={() => router.push({ pathname: '/review', params: reviewLangFilter ? { language: reviewLangFilter } : {} })}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.reviewCtaText}>▶ Review due cards</Text>
+          </TouchableOpacity>
+          {vocabLanguages.length > 1 && (
+            <View style={styles.langFilterRow}>
+              <TouchableOpacity
+                style={[styles.langFilterChip, !reviewLangFilter && styles.langFilterChipActive]}
+                onPress={() => setReviewLangFilter(null)}
+              >
+                <Text style={[styles.langFilterText, !reviewLangFilter && styles.langFilterTextActive]}>All</Text>
+              </TouchableOpacity>
+              {vocabLanguages.map((lang) => (
+                <TouchableOpacity
+                  key={lang}
+                  style={[styles.langFilterChip, reviewLangFilter === lang && styles.langFilterChipActive]}
+                  onPress={() => setReviewLangFilter(lang)}
+                >
+                  <Text style={[styles.langFilterText, reviewLangFilter === lang && styles.langFilterTextActive]}>
+                    {getLanguageName(lang)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+          <Text style={styles.cardLabel}>Lists</Text>
+        </View>
+      }
+      ListEmptyComponent={
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyIcon}>🗂️</Text>
+          <Text style={styles.emptyTitle}>No lists yet</Text>
+          <Text style={styles.emptySubtitle}>Create a list to group notecards into a deck.</Text>
+        </View>
+      }
+      renderItem={({ item }) => (
+        <View style={styles.vocabCard}>
+          <View style={styles.vocabHeader}>
+            <View style={styles.vocabWordRow}>
+              <Text style={styles.vocabWord}>{item.name}</Text>
+            </View>
+            <View style={styles.vocabCardActions}>
+              <TouchableOpacity onPress={() => handleExportList(item)} hitSlop={8}>
+                <Text style={styles.vocabSpeak}>📤</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => openRenameList(item)} hitSlop={8}>
+                <Text style={styles.vocabEdit}>✎</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => handleDeleteList(item)} hitSlop={8}>
+                <Text style={styles.vocabRemove}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+          <Text style={styles.vocabDefinition}>
+            {item.itemCount ?? 0} word{item.itemCount === 1 ? '' : 's'}
+            {item.language ? ` · ${getLanguageName(item.language)}` : ''}
+          </Text>
+          <TouchableOpacity
+            style={styles.conjBtn}
+            onPress={() => router.push({ pathname: '/review', params: { listId: item.id } })}
+          >
+            <Text style={styles.conjBtnText}>Review this list</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      ListFooterComponent={
+        <TouchableOpacity style={styles.newListBtn} onPress={() => openCreateList()}>
+          <Text style={styles.newListBtnText}>+ New list</Text>
+        </TouchableOpacity>
+      }
+    />
+  );
+
+  // ── Cost page ───────────────────────────────────────────────────────────────
+  const costTotalCost = costEvents.reduce((sum, e) => sum + e.cost, 0);
+  const costTotalInputCredits = costEvents.reduce((sum, e) => sum + e.inputCredits, 0);
+  const costTotalOutputCredits = costEvents.reduce((sum, e) => sum + e.outputCredits, 0);
+  const costSources = SOURCE_ORDER.filter((src) => costEvents.some((e) => e.source === src));
+
+  const costPage = (
+    <FlatList
+      style={{ width }}
+      nestedScrollEnabled
+      contentContainerStyle={costEvents.length === 0 ? styles.emptyContainer : styles.listContent}
+      data={costEvents}
+      keyExtractor={(e) => e.id}
+      ListHeaderComponent={
+        <View>
+          <View style={styles.statsBanner}>
+            <View style={styles.statsTopRow}>
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>{formatCost(costTotalCost)}</Text>
+                <Text style={styles.statLabel}>total cost</Text>
+              </View>
+              <View style={styles.statDivider} />
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>{formatTokens(costTotalInputCredits)}</Text>
+                <Text style={styles.statLabel}>input credits</Text>
+              </View>
+              <View style={styles.statDivider} />
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>{formatTokens(costTotalOutputCredits)}</Text>
+                <Text style={styles.statLabel}>output credits</Text>
+              </View>
+            </View>
+          </View>
+          <View style={styles.langFilterRow}>
+            {COST_TIME_RANGES.map((range, i) => (
+              <TouchableOpacity
+                key={range.label}
+                style={[styles.langFilterChip, costRangeIndex === i && styles.langFilterChipActive]}
+                onPress={() => setCostRangeIndex(i)}
+              >
+                <Text style={[styles.langFilterText, costRangeIndex === i && styles.langFilterTextActive]}>
+                  {range.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {costSources.length > 1 && (
+            <View style={styles.langFilterRow}>
+              <TouchableOpacity
+                style={[styles.langFilterChip, !costSourceFilter && styles.langFilterChipActive]}
+                onPress={() => setCostSourceFilter(null)}
+              >
+                <Text style={[styles.langFilterText, !costSourceFilter && styles.langFilterTextActive]}>All</Text>
+              </TouchableOpacity>
+              {costSources.map((src) => (
+                <TouchableOpacity
+                  key={src}
+                  style={[styles.langFilterChip, costSourceFilter === src && styles.langFilterChipActive]}
+                  onPress={() => setCostSourceFilter(src)}
+                >
+                  <Text style={[styles.langFilterText, costSourceFilter === src && styles.langFilterTextActive]}>
+                    {SOURCE_LABELS[src]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
+      }
+      ListEmptyComponent={
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyIcon}>💳</Text>
+          <Text style={styles.emptyTitle}>No costs recorded</Text>
+          <Text style={styles.emptySubtitle}>Nothing for this filter yet.</Text>
+        </View>
+      }
+      renderItem={({ item }) => (
+        <View style={styles.costEventCard}>
+          <View style={styles.costEventRow}>
+            <Text style={styles.costEventSource}>{SOURCE_LABELS[item.source] ?? item.source}</Text>
+            <Text style={styles.costEventCost}>{formatCost(item.cost)}</Text>
+          </View>
+          <Text style={styles.costEventMeta}>
+            {item.model} · {formatTokens(item.inputCredits)} in / {formatTokens(item.outputCredits)} out
+            {item.language ? ` · ${getLanguageName(item.language)}` : ''}
+          </Text>
+          <Text style={styles.costEventDate}>{formatDate(item.createdAt)}</Text>
         </View>
       )}
     />
@@ -535,6 +816,8 @@ export default function HomeScreen() {
         {translatePage}
         {articlesPage}
         {vocabPage}
+        {reviewPage}
+        {costPage}
       </ScrollView>
 
       {/* Regen loading overlay */}
@@ -681,6 +964,74 @@ export default function HomeScreen() {
             </TouchableOpacity>
             <TouchableOpacity style={styles.editSaveBtn} onPress={handleSaveEdit} disabled={savingEdit}>
               <Text style={styles.editSaveText}>{savingEdit ? 'Saving…' : 'Save'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Add-to-list picker */}
+      <Modal
+        visible={!!pickerWord}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPickerWord(null)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setPickerWord(null)} />
+        <View style={styles.modalSheet}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>Add "{pickerWord?.word}" to a list</Text>
+          <FlatList
+            data={lists}
+            keyExtractor={(l) => l.id}
+            renderItem={({ item }) => (
+              <TouchableOpacity style={styles.pickerItem} onPress={() => handleAddToList(item.id)}>
+                <Text style={styles.pickerItemText}>{item.name}</Text>
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={<Text style={styles.modalEmpty}>No lists yet.</Text>}
+            style={styles.modalList}
+          />
+          <TouchableOpacity style={styles.newListBtn} onPress={openCreateListFromPicker}>
+            <Text style={styles.newListBtnText}>+ New list</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
+      {/* Create / rename list modal */}
+      <Modal
+        visible={!!listModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setListModal(null)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setListModal(null)} />
+        <View style={styles.modalSheet}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>{listModal?.mode === 'rename' ? 'Rename List' : 'New List'}</Text>
+          <Text style={styles.editLabel}>Name</Text>
+          <TextInput
+            style={styles.editInput}
+            value={listForm.name}
+            onChangeText={(v) => setListForm({ ...listForm, name: v })}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <Text style={styles.editLabel}>Language (optional)</Text>
+          <TextInput
+            style={styles.editInput}
+            value={listForm.language}
+            onChangeText={(v) => setListForm({ ...listForm, language: v })}
+            placeholder="e.g. es"
+            placeholderTextColor={colors.textFaint}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <View style={styles.editActions}>
+            <TouchableOpacity style={styles.editCancelBtn} onPress={() => setListModal(null)}>
+              <Text style={styles.editCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.editSaveBtn} onPress={handleSaveList} disabled={savingList}>
+              <Text style={styles.editSaveText}>{savingList ? 'Saving…' : 'Save'}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -852,14 +1203,7 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   statItem: { alignItems: 'center', flex: 1 },
   statValue: { fontSize: 18, fontWeight: '800', color: colors.text },
   statLabel: { fontSize: 11, color: colors.textFaint, marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
-  costLinkBtn: {
-    marginTop: 10,
-    paddingTop: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-    alignItems: 'center',
-  },
-  costLinkText: { fontSize: 13, fontWeight: '600', color: colors.accent },
+  statDivider: { width: 1, height: 32, backgroundColor: colors.border },
 
   articleCard: {
     backgroundColor: colors.surface,
@@ -878,6 +1222,50 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   articleUrl: { fontSize: 12, color: colors.textFaint, marginBottom: 6 },
   articlePreview: { fontSize: 14, color: colors.textMuted, lineHeight: 20 },
   articleCost: { fontSize: 11, color: colors.textFaint, marginTop: 6 },
+
+  // Cost page
+  costEventCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  costEventRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  costEventSource: { fontSize: 14, fontWeight: '700', color: colors.text },
+  costEventCost: { fontSize: 14, fontWeight: '700', color: colors.accent },
+  costEventMeta: { fontSize: 12, color: colors.textMuted, marginTop: 4 },
+  costEventDate: { fontSize: 11, color: colors.textFaint, marginTop: 2 },
+
+  // Review page
+  reviewCta: {
+    backgroundColor: colors.accent,
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  reviewCtaText: { fontSize: 16, fontWeight: '800', color: colors.accentText },
+  newListBtn: {
+    marginTop: 4,
+    borderWidth: 1.5,
+    borderColor: colors.accent,
+    borderStyle: 'dashed',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  newListBtnText: { fontSize: 14, fontWeight: '600', color: colors.accent },
+  pickerItem: {
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  pickerItemText: { fontSize: 16, color: colors.text },
 
   // Vocab page
   vocabSearchInput: {
@@ -898,6 +1286,15 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
     borderRadius: 16,
     backgroundColor: colors.chipBg,
   },
+  exportBtn: {
+    borderWidth: 1.5,
+    borderColor: colors.accent,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  exportBtnText: { fontSize: 13, fontWeight: '600', color: colors.accent },
   langFilterChipActive: { backgroundColor: colors.accent },
   langFilterText: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
   langFilterTextActive: { color: colors.accentText },

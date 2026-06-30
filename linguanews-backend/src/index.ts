@@ -6,6 +6,7 @@ import articlesRouter from './routes/articles';
 import vocabRouter from './routes/vocab';
 import scrapeRouter from './routes/scrape';
 import apiCostsRouter from './routes/api-costs';
+import notecardsRouter from './routes/notecards';
 
 dotenv.config();
 
@@ -32,11 +33,11 @@ app.use('/articles', articlesRouter);
 app.use('/vocab', vocabRouter);
 app.use('/scrape', scrapeRouter);
 app.use('/api-costs', apiCostsRouter);
+app.use('/notecards', notecardsRouter);
 
 async function migrate() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`);
 
-  // Fresh install: create with the correct schema
   await pool.query(`
     CREATE TABLE IF NOT EXISTS articles (
       id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -56,35 +57,6 @@ async function migrate() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS articles_user_id_idx ON articles (user_id, created_at DESC)`);
 
-  // Upgrade path: add new columns if not present (no-op on fresh installs)
-  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS input_tokens         INTEGER NOT NULL DEFAULT 0`);
-  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS output_tokens        INTEGER NOT NULL DEFAULT 0`);
-  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS original_sentences   JSONB   NOT NULL DEFAULT '[]'`);
-  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS translated_sentences JSONB   NOT NULL DEFAULT '[]'`);
-  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS deleted              BOOLEAN NOT NULL DEFAULT false`);
-
-  // Backfill sentence arrays from old flat-text columns before dropping them
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='articles' AND column_name='translated_text') THEN
-        UPDATE articles
-        SET translated_sentences = jsonb_build_array(translated_text)
-        WHERE translated_text IS NOT NULL AND translated_text != '' AND translated_sentences = '[]'::jsonb;
-      END IF;
-      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='articles' AND column_name='original_text') THEN
-        UPDATE articles
-        SET original_sentences = jsonb_build_array(original_text)
-        WHERE original_text IS NOT NULL AND original_text != '' AND original_sentences = '[]'::jsonb;
-      END IF;
-    END $$
-  `);
-
-  // Drop obsolete columns (no-op if already removed)
-  await pool.query(`ALTER TABLE articles DROP COLUMN IF EXISTS translated_text`);
-  await pool.query(`ALTER TABLE articles DROP COLUMN IF EXISTS original_text`);
-  await pool.query(`ALTER TABLE articles DROP COLUMN IF EXISTS sentence_pairs`);
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vocab_words (
       id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -92,13 +64,12 @@ async function migrate() {
       language        TEXT        NOT NULL,
       definition      TEXT        NOT NULL,
       part_of_speech  TEXT,
+      gender          TEXT,
+      article         TEXT,
       conjugation     JSONB,
       UNIQUE(word, language)
     )
   `);
-
-  await pool.query(`ALTER TABLE vocab_words ADD COLUMN IF NOT EXISTS gender TEXT`);
-  await pool.query(`ALTER TABLE vocab_words ADD COLUMN IF NOT EXISTS article TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS api_costs (
@@ -107,6 +78,7 @@ async function migrate() {
       created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       source               TEXT        NOT NULL,
       model                TEXT        NOT NULL,
+      language             TEXT,
       input_credit_rate    NUMERIC     NOT NULL DEFAULT 0,
       total_input_credits  INTEGER     NOT NULL DEFAULT 0,
       output_credit_rate   NUMERIC     NOT NULL DEFAULT 0,
@@ -114,21 +86,47 @@ async function migrate() {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS api_costs_user_id_idx ON api_costs (user_id, created_at DESC)`);
-  await pool.query(`ALTER TABLE api_costs ADD COLUMN IF NOT EXISTS language TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_vocab (
-      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id         TEXT        NOT NULL,
-      vocab_word_id   UUID        NOT NULL REFERENCES vocab_words(id) ON DELETE CASCADE,
-      added_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id          TEXT        NOT NULL,
+      vocab_word_id    UUID        NOT NULL REFERENCES vocab_words(id) ON DELETE CASCADE,
+      added_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      due_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      interval_days    REAL        NOT NULL DEFAULT 0,
+      ease_factor      REAL        NOT NULL DEFAULT 2.5,
+      repetitions      INTEGER     NOT NULL DEFAULT 0,
+      last_reviewed_at TIMESTAMPTZ,
       UNIQUE(user_id, vocab_word_id)
     )
   `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS user_vocab_user_id_idx ON user_vocab (user_id, added_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS user_vocab_due_idx ON user_vocab (user_id, due_at)`);
 
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS user_vocab_user_id_idx ON user_vocab (user_id, added_at DESC)
+    CREATE TABLE IF NOT EXISTS notecard_lists (
+      id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id     TEXT        NOT NULL,
+      name        TEXT        NOT NULL,
+      language    TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(user_id, name)
+    )
   `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS notecard_lists_user_id_idx ON notecard_lists (user_id, created_at DESC)`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notecard_list_items (
+      id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      list_id       UUID        NOT NULL REFERENCES notecard_lists(id) ON DELETE CASCADE,
+      user_vocab_id UUID        NOT NULL REFERENCES user_vocab(id) ON DELETE CASCADE,
+      added_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(list_id, user_vocab_id)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS notecard_list_items_list_id_idx ON notecard_list_items (list_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS notecard_list_items_user_vocab_id_idx ON notecard_list_items (user_vocab_id)`);
 
   console.log('Migrations complete');
 }

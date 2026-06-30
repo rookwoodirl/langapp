@@ -56,4 +56,19 @@ export interface UserVocabWord {
   article?: string;
   conjugation?: VerbConjugation;
   addedAt: number;
+  dueAt: number;
+  intervalDays: number;
+  easeFactor: number;
+  repetitions: number;
+  lastReviewedAt?: number;
+}
+
+export type ReviewGrade = 'again' | 'hard' | 'good' | 'easy';
+
+export interface NotecardList {
+  id: string;
+  name: string;
+  language?: string;
+  createdAt: number;
+  itemCount?: number;
 }

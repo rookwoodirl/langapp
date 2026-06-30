@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Article, UserVocabWord, VerbConjugation } from '../types';
+import { Article, NotecardList, ReviewGrade, UserVocabWord, VerbConjugation } from '../types';
 
 const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL ?? '').replace(/\/$/, '');
 const USER_ID_KEY = '@linguanews/user_id';
@@ -101,32 +101,37 @@ export async function apiDeleteArticle(id: string): Promise<void> {
   }
 }
 
-export interface CostSummaryRow {
+export interface CostEvent {
+  id: string;
+  createdAt: number;
+  source: string;
+  model: string;
+  language?: string;
   inputCredits: number;
   outputCredits: number;
-  totalCost: number;
+  cost: number;
 }
 
-export async function apiGetCostSummary(filters?: { language?: string; since?: Date }): Promise<Record<string, CostSummaryRow>> {
+export async function apiGetCostEvents(filters?: { since?: Date; source?: string; limit?: number }): Promise<CostEvent[]> {
   try {
     const userId = await getUserId();
     const params = new URLSearchParams({ user_id: userId });
-    if (filters?.language) params.set('language', filters.language);
     if (filters?.since) params.set('since', filters.since.toISOString());
-    const res = await fetch(`${BACKEND_URL}/api-costs/summary?${params.toString()}`);
-    if (!res.ok) return {};
-    return (await parseJson(res)) as Record<string, CostSummaryRow>;
-  } catch {
-    return {};
-  }
-}
-
-export async function apiGetCostLanguages(): Promise<string[]> {
-  try {
-    const userId = await getUserId();
-    const res = await fetch(`${BACKEND_URL}/api-costs/languages?user_id=${encodeURIComponent(userId)}`);
+    if (filters?.source) params.set('source', filters.source);
+    if (filters?.limit) params.set('limit', String(filters.limit));
+    const res = await fetch(`${BACKEND_URL}/api-costs/events?${params.toString()}`);
     if (!res.ok) return [];
-    return (await parseJson(res)) as string[];
+    const data = (await parseJson(res)) as Record<string, unknown>[];
+    return data.map((row) => ({
+      id: row.id as string,
+      createdAt: new Date(row.createdAt as string).getTime(),
+      source: row.source as string,
+      model: row.model as string,
+      language: (row.language as string) ?? undefined,
+      inputCredits: row.inputCredits as number,
+      outputCredits: row.outputCredits as number,
+      cost: row.cost as number,
+    }));
   } catch {
     return [];
   }
@@ -151,6 +156,21 @@ function rowToVocabWord(row: Record<string, unknown>): UserVocabWord {
     article: (row.article as string) ?? undefined,
     conjugation: (row.conjugation as VerbConjugation) ?? undefined,
     addedAt: new Date(row.added_at as string).getTime(),
+    dueAt: new Date(row.due_at as string).getTime(),
+    intervalDays: row.interval_days as number,
+    easeFactor: row.ease_factor as number,
+    repetitions: row.repetitions as number,
+    lastReviewedAt: row.last_reviewed_at ? new Date(row.last_reviewed_at as string).getTime() : undefined,
+  };
+}
+
+function rowToNotecardList(row: Record<string, unknown>): NotecardList {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    language: (row.language as string) ?? undefined,
+    createdAt: new Date(row.created_at as string).getTime(),
+    itemCount: row.item_count != null ? Number(row.item_count) : undefined,
   };
 }
 
@@ -221,6 +241,97 @@ export async function apiUpdateVocabWord(vocabWordId: string, params: {
 export async function apiRemoveVocabWord(userVocabId: string): Promise<void> {
   const userId = await getUserId();
   await fetch(`${BACKEND_URL}/vocab/${userVocabId}?user_id=${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function apiGetDueNotecards(filters?: { language?: string; listId?: string; limit?: number }): Promise<UserVocabWord[]> {
+  const userId = await getUserId();
+  const params = new URLSearchParams({ user_id: userId });
+  if (filters?.language) params.set('language', filters.language);
+  if (filters?.listId) params.set('list_id', filters.listId);
+  if (filters?.limit) params.set('limit', String(filters.limit));
+  const res = await fetch(`${BACKEND_URL}/notecards/due?${params.toString()}`);
+  const data = await parseJson(res);
+  if (!res.ok) throw new Error('Failed to load due notecards');
+  return (data as Record<string, unknown>[]).map(rowToVocabWord);
+}
+
+export async function apiReviewNotecard(userVocabId: string, grade: ReviewGrade): Promise<UserVocabWord> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/notecards/${userVocabId}/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, grade }),
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Failed to submit review');
+  return rowToVocabWord(data);
+}
+
+export async function apiGetNotecardLists(): Promise<NotecardList[]> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/notecards/lists?user_id=${encodeURIComponent(userId)}`);
+  const data = await parseJson(res);
+  if (!res.ok) throw new Error('Failed to load notecard lists');
+  return (data as Record<string, unknown>[]).map(rowToNotecardList);
+}
+
+export async function apiCreateNotecardList(name: string, language?: string): Promise<NotecardList> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/notecards/lists`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, name, language: language ?? null }),
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Failed to create list');
+  return rowToNotecardList(data);
+}
+
+export async function apiUpdateNotecardList(listId: string, params: { name?: string; language?: string }): Promise<NotecardList> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/notecards/lists/${listId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, name: params.name ?? null, language: params.language ?? null }),
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Failed to update list');
+  return rowToNotecardList(data);
+}
+
+export async function apiDeleteNotecardList(listId: string): Promise<void> {
+  const userId = await getUserId();
+  await fetch(`${BACKEND_URL}/notecards/lists/${listId}?user_id=${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function apiGetNotecardListItems(listId: string): Promise<UserVocabWord[]> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/notecards/lists/${listId}/items?user_id=${encodeURIComponent(userId)}`);
+  const data = await parseJson(res);
+  if (!res.ok) throw new Error('Failed to load list items');
+  return (data as Record<string, unknown>[]).map(rowToVocabWord);
+}
+
+export async function apiAddToNotecardList(listId: string, userVocabId: string): Promise<void> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/notecards/lists/${listId}/items`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, user_vocab_id: userVocabId }),
+  });
+  if (!res.ok) {
+    const data = await parseJson(res).catch(() => ({})) as Record<string, unknown>;
+    throw new Error((data.error as string) ?? 'Failed to add word to list');
+  }
+}
+
+export async function apiRemoveFromNotecardList(listId: string, userVocabId: string): Promise<void> {
+  const userId = await getUserId();
+  await fetch(`${BACKEND_URL}/notecards/lists/${listId}/items/${userVocabId}?user_id=${encodeURIComponent(userId)}`, {
     method: 'DELETE',
   });
 }

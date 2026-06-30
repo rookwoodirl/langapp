@@ -32,62 +32,50 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/summary', async (req: Request, res: Response) => {
-  const { user_id, language, since } = req.query;
+// List individual cost events (most recent first), optionally filtered by time range / source
+router.get('/events', async (req: Request, res: Response) => {
+  const { user_id, since, source, limit } = req.query;
   if (!user_id) return res.status(400).json({ error: 'user_id query param is required' });
 
   const conditions = ['user_id = $1'];
   const params: unknown[] = [user_id];
-  if (language) {
-    params.push(language);
-    conditions.push(`language = $${params.length}`);
-  }
   if (since) {
     params.push(since);
     conditions.push(`created_at >= $${params.length}`);
   }
+  if (source) {
+    params.push(source);
+    conditions.push(`source = $${params.length}`);
+  }
+
+  const cappedLimit = Math.min(Number(limit) || 200, 500);
 
   try {
     const result = await pool.query(
       `SELECT
-         source,
-         SUM(total_input_credits)  AS input_credits,
-         SUM(total_output_credits) AS output_credits,
-         SUM(total_input_credits  * input_credit_rate  / 1000000.0 +
-             total_output_credits * output_credit_rate / 1000000.0) AS total_cost
+         id, created_at, source, model, language,
+         total_input_credits, total_output_credits,
+         (total_input_credits  * input_credit_rate  / 1000000.0 +
+          total_output_credits * output_credit_rate / 1000000.0) AS cost
        FROM api_costs
        WHERE ${conditions.join(' AND ')}
-       GROUP BY source`,
+       ORDER BY created_at DESC
+       LIMIT ${cappedLimit}`,
       params
     );
 
-    const summary: Record<string, { inputCredits: number; outputCredits: number; totalCost: number }> = {};
-    for (const row of result.rows) {
-      summary[row.source] = {
-        inputCredits: Number(row.input_credits),
-        outputCredits: Number(row.output_credits),
-        totalCost: Number(row.total_cost),
-      };
-    }
-    return res.json(summary);
+    return res.json(result.rows.map((row) => ({
+      id: row.id,
+      createdAt: row.created_at,
+      source: row.source,
+      model: row.model,
+      language: row.language,
+      inputCredits: Number(row.total_input_credits),
+      outputCredits: Number(row.total_output_credits),
+      cost: Number(row.cost),
+    })));
   } catch (err) {
-    console.error('GET /api-costs/summary error:', err);
-    return res.status(500).json({ error: 'Database error' });
-  }
-});
-
-router.get('/languages', async (req: Request, res: Response) => {
-  const { user_id } = req.query;
-  if (!user_id) return res.status(400).json({ error: 'user_id query param is required' });
-
-  try {
-    const result = await pool.query(
-      `SELECT DISTINCT language FROM api_costs WHERE user_id = $1 AND language IS NOT NULL ORDER BY language`,
-      [user_id]
-    );
-    return res.json(result.rows.map((r) => r.language as string));
-  } catch (err) {
-    console.error('GET /api-costs/languages error:', err);
+    console.error('GET /api-costs/events error:', err);
     return res.status(500).json({ error: 'Database error' });
   }
 });
