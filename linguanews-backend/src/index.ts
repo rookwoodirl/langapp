@@ -35,29 +35,56 @@ app.use('/api-costs', apiCostsRouter);
 
 async function migrate() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`);
+
+  // Fresh install: create with the correct schema
   await pool.query(`
     CREATE TABLE IF NOT EXISTS articles (
-      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id         TEXT        NOT NULL,
-      url             TEXT,
-      title           TEXT,
-      source_language TEXT        NOT NULL DEFAULT 'en',
-      target_language TEXT        NOT NULL DEFAULT 'es',
-      translated_text TEXT        NOT NULL,
-      vocab           JSONB       NOT NULL DEFAULT '[]',
-      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id              TEXT        NOT NULL,
+      url                  TEXT,
+      title                TEXT,
+      source_language      TEXT        NOT NULL DEFAULT 'en',
+      target_language      TEXT        NOT NULL DEFAULT 'es',
+      original_sentences   JSONB       NOT NULL DEFAULT '[]',
+      translated_sentences JSONB       NOT NULL DEFAULT '[]',
+      vocab                JSONB       NOT NULL DEFAULT '[]',
+      input_tokens         INTEGER     NOT NULL DEFAULT 0,
+      output_tokens        INTEGER     NOT NULL DEFAULT 0,
+      deleted              BOOLEAN     NOT NULL DEFAULT false,
+      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS articles_user_id_idx ON articles (user_id, created_at DESC)
-  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS articles_user_id_idx ON articles (user_id, created_at DESC)`);
 
-  // Add columns to existing tables (no-op if already present)
+  // Upgrade path: add new columns if not present (no-op on fresh installs)
   await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS input_tokens         INTEGER NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS output_tokens        INTEGER NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS original_sentences   JSONB   NOT NULL DEFAULT '[]'`);
   await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS translated_sentences JSONB   NOT NULL DEFAULT '[]'`);
   await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS deleted              BOOLEAN NOT NULL DEFAULT false`);
+
+  // Backfill sentence arrays from old flat-text columns before dropping them
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='articles' AND column_name='translated_text') THEN
+        UPDATE articles
+        SET translated_sentences = jsonb_build_array(translated_text)
+        WHERE translated_text IS NOT NULL AND translated_text != '' AND translated_sentences = '[]'::jsonb;
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='articles' AND column_name='original_text') THEN
+        UPDATE articles
+        SET original_sentences = jsonb_build_array(original_text)
+        WHERE original_text IS NOT NULL AND original_text != '' AND original_sentences = '[]'::jsonb;
+      END IF;
+    END $$
+  `);
+
+  // Drop obsolete columns (no-op if already removed)
+  await pool.query(`ALTER TABLE articles DROP COLUMN IF EXISTS translated_text`);
+  await pool.query(`ALTER TABLE articles DROP COLUMN IF EXISTS original_text`);
+  await pool.query(`ALTER TABLE articles DROP COLUMN IF EXISTS sentence_pairs`);
+
   await pool.query(`ALTER TABLE vocab_words ADD COLUMN IF NOT EXISTS gender TEXT`);
   await pool.query(`ALTER TABLE vocab_words ADD COLUMN IF NOT EXISTS article TEXT`);
 

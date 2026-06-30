@@ -81,11 +81,24 @@ export async function apiLoadArticles(): Promise<Article[]> {
   return (data as Record<string, unknown>[]).map(rowToArticle);
 }
 
+export async function apiLoadArticle(id: string): Promise<Article | null> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/articles/${id}?user_id=${encodeURIComponent(userId)}`);
+  if (res.status === 404) return null;
+  const data = await parseJson(res);
+  if (!res.ok) throw new Error('Failed to load article');
+  return rowToArticle(data as Record<string, unknown>);
+}
+
 export async function apiDeleteArticle(id: string): Promise<void> {
   const userId = await getUserId();
-  await fetch(`${BACKEND_URL}/articles/${id}?user_id=${encodeURIComponent(userId)}`, {
+  const res = await fetch(`${BACKEND_URL}/articles/${id}?user_id=${encodeURIComponent(userId)}`, {
     method: 'DELETE',
   });
+  if (!res.ok) {
+    const data = await parseJson(res).catch(() => ({})) as Record<string, unknown>;
+    throw new Error((data.error as string) ?? 'Failed to delete article');
+  }
 }
 
 export async function apiClearArticles(): Promise<void> {

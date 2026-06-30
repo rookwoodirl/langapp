@@ -27,10 +27,17 @@ export default function ArticleScreen() {
   const cardWidth = width - 32;
 
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { currentArticle, savedArticles, lookupWord, saveArticle, vocabInputTokens, vocabOutputTokens, ttsPlaying, toggleTTS } = useArticleStore();
+  const { currentArticle, savedArticles, lookupWord, saveArticle, loadArticleById, vocabInputTokens, vocabOutputTokens, ttsPlaying, toggleTTS } = useArticleStore();
   const { addWord, words: vocabWords } = useVocabStore();
 
   const article = currentArticle?.id === id ? currentArticle : null;
+
+  // Deep-link / reload fallback: fetch from backend if article isn't in local state
+  useEffect(() => {
+    if (!article && id) {
+      loadArticleById(id).catch(() => {});
+    }
+  }, [id]);
 
   const pairs = useMemo<SentencePair[]>(() => article?.sentencePairs ?? [], [article?.sentencePairs]);
 
@@ -132,11 +139,9 @@ export default function ArticleScreen() {
   }
 
   function handleGenerateAudio() {
-    const wordCount = translatedText.split(/\s+/).filter(Boolean).length;
-    const estimate = (wordCount * 0.001).toFixed(2);
     Alert.alert(
       'Generate audio?',
-      `This will generate spoken audio for the article (~${wordCount} words). Estimated cost: $${estimate}.`,
+      `This will generate spoken audio for the article. Estimated cost: $0.00.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -167,7 +172,8 @@ export default function ArticleScreen() {
           onPress={async () => {
             setSaving(true);
             try {
-              await saveArticle();
+              const newId = await saveArticle();
+              if (newId && newId !== id) router.replace(`/article/${newId}`);
             } catch (err) {
               Alert.alert('Save failed', err instanceof Error ? err.message : String(err));
             } finally {

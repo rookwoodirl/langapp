@@ -3,7 +3,7 @@ import { Article, UserSettings } from '../types';
 import { scrapeArticle } from '../services/scraper';
 import { translateArticle } from '../services/translator';
 import { lookupWordDefinition, LookupResult } from '../services/vocab';
-import { apiSaveArticle, apiLoadArticles, apiDeleteArticle, apiClearArticles } from '../services/api';
+import { apiSaveArticle, apiLoadArticles, apiLoadArticle, apiDeleteArticle, apiClearArticles } from '../services/api';
 import { useUsageStore } from './usageStore';
 import { recordApiCost, CostSource } from '../services/apiCosts';
 
@@ -25,7 +25,8 @@ interface ArticleStore {
   loadArticle: (input: string, isUrl: boolean, settings: UserSettings, source?: CostSource) => Promise<void>;
   lookupWord: (word: string, settings: UserSettings) => Promise<{ definition: string; partOfSpeech?: string; gender?: string; article?: string }>;
   toggleTTS: () => void;
-  saveArticle: () => Promise<void>;
+  saveArticle: () => Promise<string | undefined>;
+  loadArticleById: (id: string) => Promise<void>;
   loadSavedArticles: () => Promise<void>;
   clearSavedArticles: () => Promise<void>;
   deleteArticle: (id: string) => Promise<void>;
@@ -138,14 +139,20 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
 
   saveArticle: async () => {
     const { currentArticle, savedArticles } = get();
-    if (!currentArticle) return;
+    if (!currentArticle) return undefined;
 
     const already = savedArticles.find((a) => a.id === currentArticle.id);
-    if (already) return;
+    if (already) return currentArticle.id;
 
     const backendId = await apiSaveArticle(currentArticle);
     const saved = { ...currentArticle, id: backendId };
     set({ currentArticle: saved, savedArticles: [saved, ...savedArticles] });
+    return backendId;
+  },
+
+  loadArticleById: async (id) => {
+    const article = await apiLoadArticle(id);
+    if (article) set({ currentArticle: article });
   },
 
   loadSavedArticles: async () => {

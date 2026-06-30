@@ -7,8 +7,8 @@ const router = Router();
 router.post('/', async (req: Request, res: Response) => {
   const { user_id, url, title, source_language, target_language, sentence_pairs, vocab, input_tokens, output_tokens } = req.body;
 
-  if (!user_id || !Array.isArray(sentence_pairs)) {
-    return res.status(400).json({ error: 'user_id and sentence_pairs are required' });
+  if (!user_id || !Array.isArray(sentence_pairs) || sentence_pairs.length === 0) {
+    return res.status(400).json({ error: 'user_id and sentence_pairs (non-empty) are required' });
   }
 
   const originalSentences: string[] = sentence_pairs.map((p: { original: string }) => p.original ?? '');
@@ -100,6 +100,7 @@ router.delete('/', async (req: Request, res: Response) => {
 router.delete('/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
   const { user_id } = req.query;
+  if (!user_id) return res.status(400).json({ error: 'user_id query param is required' });
 
   try {
     await pool.query(

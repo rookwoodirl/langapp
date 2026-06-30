@@ -106,12 +106,15 @@ export default function HomeScreen() {
       Alert.alert('Paste a URL first', 'Tap the Paste button to load a link from your clipboard.');
       return;
     }
+    // Capture and reset source before showing the alert so a Cancel can never leave a stale value
+    const src = pendingSourceRef.current;
+    pendingSourceRef.current = 'article';
     Alert.alert(
       'Translate article?',
       'This will send the article to Claude for translation. Estimated cost: max $1.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Translate', onPress: () => { const src = pendingSourceRef.current; pendingSourceRef.current = 'article'; fetchArticle(url.trim(), true, settings, src); } },
+        { text: 'Translate', onPress: () => { fetchArticle(url.trim(), true, settings, src); } },
       ]
     );
   }
@@ -135,10 +138,14 @@ export default function HomeScreen() {
         outputCreditRate: 15.0,
         totalOutputCredits: result.outputTokens,
       });
-      for (const word of result.words) {
-        await addWord({ word: word.word, language: article.targetLanguage, definition: word.definition, partOfSpeech: word.partOfSpeech });
-      }
-      Alert.alert('Vocab added', `Added ${result.words.length} recommended words to your vocab list.`);
+      const settled = await Promise.allSettled(
+        result.words.map((word) =>
+          addWord({ word: word.word, language: article.targetLanguage, definition: word.definition, partOfSpeech: word.partOfSpeech })
+        )
+      );
+      const saved = settled.filter((r) => r.status === 'fulfilled').length;
+      const failed = settled.filter((r) => r.status === 'rejected').length;
+      Alert.alert('Vocab added', `Added ${saved} word${saved !== 1 ? 's' : ''}${failed > 0 ? `, ${failed} failed` : ''}.`);
     } catch (err) {
       Alert.alert('Error', err instanceof Error ? err.message : 'Failed to generate vocab.');
     } finally {
