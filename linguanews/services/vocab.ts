@@ -4,6 +4,8 @@ import { VerbConjugation } from '../types';
 export interface LookupResult {
   definition: string;
   partOfSpeech?: string;
+  gender?: string;
+  article?: string;
   inputTokens: number;
   outputTokens: number;
 }
@@ -37,11 +39,15 @@ export async function lookupWordDefinition(
     model: 'claude-sonnet-4-6',
     max_tokens: 256,
     system:
-      `You are a language translation assistant. A ${sourceLanguage} speaker is learning ${targetLanguage}. ` +
+      `You are a bilingual translation dictionary. A ${sourceLanguage} speaker is learning ${targetLanguage}. ` +
       `${contextLine}` +
-      `Given a ${targetLanguage} word, return a JSON object with exactly two keys:\n` +
-      `- "definition": a clear 1–2 sentence explanation in ${sourceLanguage}\n` +
-      `- "partOfSpeech": the grammatical category (noun, verb, adjective, etc.)\n` +
+      `Given a ${targetLanguage} word, return a JSON dictionary entry with these keys:\n` +
+      `- "definition": concise definition in ${sourceLanguage}, as a translation dictionary would write it. ` +
+      `For verbs, always begin with "to" (e.g. "to run", "to eat"). ` +
+      `For nouns, use a short noun phrase.\n` +
+      `- "partOfSpeech": grammatical category (noun, verb, adjective, etc.)\n` +
+      `- "gender": for nouns only — "masculine", "feminine", "neuter", or "common"; omit for all other parts of speech\n` +
+      `- "article": for nouns only — the definite article in ${targetLanguage} (e.g. "der", "la", "the"); omit for all other parts of speech\n` +
       `Respond with raw JSON only. No markdown, no code fences, no preamble.`,
     messages: [{ role: 'user', content: `${targetLanguage} word: "${word}"` }],
   });
@@ -51,13 +57,22 @@ export async function lookupWordDefinition(
 
   let definition = content.text;
   let partOfSpeech: string | undefined;
+  let gender: string | undefined;
+  let article: string | undefined;
   try {
     const raw = content.text.trim();
     const start = raw.indexOf('{');
     const end = raw.lastIndexOf('}');
-    const parsed = JSON.parse(raw.slice(start, end + 1)) as { definition: string; partOfSpeech?: string };
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as {
+      definition: string;
+      partOfSpeech?: string;
+      gender?: string;
+      article?: string;
+    };
     definition = parsed.definition;
     partOfSpeech = parsed.partOfSpeech;
+    gender = parsed.gender;
+    article = parsed.article;
   } catch {
     // fall back to raw text if JSON parse fails
   }
@@ -65,9 +80,54 @@ export async function lookupWordDefinition(
   return {
     definition,
     partOfSpeech,
+    gender,
+    article,
     inputTokens: message.usage.input_tokens,
     outputTokens: message.usage.output_tokens,
   };
+}
+
+export async function generateRecommendedVocab(
+  translatedText: string,
+  targetLanguage: string,
+  sourceLanguage: string,
+  existingWords: string[],
+  apiKey: string
+): Promise<{ words: VocabWord[]; inputTokens: number; outputTokens: number }> {
+  if (!apiKey) throw new Error('No API key set.');
+
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  const knownStr = existingWords.length
+    ? ` Do not include words the learner already knows: ${existingWords.slice(0, 80).join(', ')}.`
+    : '';
+
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1024,
+    system:
+      `You are a language learning assistant helping a ${sourceLanguage} speaker learn ${targetLanguage}. ` +
+      `Identify the most useful vocabulary words from the given text for the learner to study.${knownStr}`,
+    messages: [
+      {
+        role: 'user',
+        content:
+          `${targetLanguage} text:\n\n${translatedText.slice(0, 4000)}\n\n` +
+          `Return a JSON array of up to 10 vocabulary words. ` +
+          `Each item: {"word":"...","definition":"(in ${sourceLanguage})...","partOfSpeech":"..."}. ` +
+          `Raw JSON array only, no markdown.`,
+      },
+    ],
+  });
+
+  const content = message.content[0];
+  if (content.type !== 'text') throw new Error('Unexpected response');
+  const raw = content.text.trim();
+  const start = raw.indexOf('[');
+  const end = raw.lastIndexOf(']');
+  if (start === -1 || end === -1) throw new Error('Could not parse vocab list from response.');
+  const words = JSON.parse(raw.slice(start, end + 1)) as VocabWord[];
+
+  return { words, inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens };
 }
 
 export async function getVerbConjugation(
@@ -80,14 +140,15 @@ export async function getVerbConjugation(
     const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
     const message = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 128,
+      max_tokens: 512,
       messages: [
         {
           role: 'user',
           content:
-            `Give the infinitive and all 6 present-tense conjugations of the ${language} verb "${verb}". ` +
-            `Reply with raw JSON only, no markdown: {"infinitive":"...","present":["yo...","tú...","él...","nosotros...","vosotros...","ellos..."]}. ` +
-            `Use the pronoun labels appropriate for ${language}.`,
+            `Give the infinitive and conjugations for the most important tenses of the ${language} verb "${verb}". ` +
+            `Use the pronoun labels appropriate for ${language}. ` +
+            `Reply with raw JSON only, no markdown:\n` +
+            `{"infinitive":"...","tenses":[{"name":"Present","forms":["...","...","...","...","...","..."]},{"name":"Past","forms":[...]},{"name":"Future","forms":[...]}]}`,
         },
       ],
     });

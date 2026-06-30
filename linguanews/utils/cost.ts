@@ -1,9 +1,17 @@
 // Claude Sonnet 4.6 pricing
-const INPUT_COST_PER_M = 3.0;
-const OUTPUT_COST_PER_M = 15.0;
+const SONNET_IN = 3.0;
+const SONNET_OUT = 15.0;
+
+// Claude Haiku 4.5 pricing (used for conjugations)
+const HAIKU_IN = 0.8;
+const HAIKU_OUT = 4.0;
 
 export function calcCost(inputTokens: number, outputTokens: number): number {
-  return (inputTokens / 1_000_000) * INPUT_COST_PER_M + (outputTokens / 1_000_000) * OUTPUT_COST_PER_M;
+  return (inputTokens / 1_000_000) * SONNET_IN + (outputTokens / 1_000_000) * SONNET_OUT;
+}
+
+export function calcCostHaiku(inputTokens: number, outputTokens: number): number {
+  return (inputTokens / 1_000_000) * HAIKU_IN + (outputTokens / 1_000_000) * HAIKU_OUT;
 }
 
 export function formatCost(cost: number): string {

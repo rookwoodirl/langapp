@@ -1,9 +1,16 @@
 export type LanguageCode = string; // e.g. "en", "de", "es", "ja"
 
+export interface SentencePair {
+  original: string;
+  translation: string;
+}
+
 export interface VocabWord {
   word: string;
   definition: string;
   partOfSpeech?: string;
+  gender?: string;
+  article?: string;
 }
 
 export interface Article {
@@ -11,8 +18,7 @@ export interface Article {
   sourceUrl: string;
   sourceLanguage: LanguageCode;
   targetLanguage: LanguageCode;
-  originalText: string;
-  translatedText: string;
+  sentencePairs: SentencePair[];
   vocabList: VocabWord[];
   createdAt: number;
   inputTokens: number;
@@ -28,9 +34,15 @@ export interface UserSettings {
   difficulty: DifficultyLevel;
 }
 
+export interface VerbTense {
+  name: string;
+  forms: string[];
+}
+
 export interface VerbConjugation {
   infinitive: string;
-  present: string[];
+  tenses: VerbTense[];
+  present?: string[]; // legacy field — kept for backward compat with saved words
 }
 
 export interface UserVocabWord {
@@ -40,6 +52,8 @@ export interface UserVocabWord {
   language: string;
   definition: string;
   partOfSpeech?: string;
+  gender?: string;
+  article?: string;
   conjugation?: VerbConjugation;
   addedAt: number;
 }

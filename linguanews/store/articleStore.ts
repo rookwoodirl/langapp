@@ -4,6 +4,7 @@ import { scrapeArticle } from '../services/scraper';
 import { translateArticle } from '../services/translator';
 import { lookupWordDefinition, LookupResult } from '../services/vocab';
 import { apiSaveArticle, apiLoadArticles, apiDeleteArticle, apiClearArticles } from '../services/api';
+import { useUsageStore } from './usageStore';
 
 interface ArticleStore {
   currentArticle: Article | null;
@@ -12,16 +13,17 @@ interface ArticleStore {
   error: string | null;
   savedArticles: Article[];
   ttsPlaying: boolean;
-  wordLookupCache: Record<string, { definition: string; partOfSpeech?: string }>;
+  wordLookupCache: Record<string, { definition: string; partOfSpeech?: string; gender?: string; article?: string }>;
   vocabInputTokens: number;
   vocabOutputTokens: number;
 
   loadArticle: (input: string, isUrl: boolean, settings: UserSettings) => Promise<void>;
-  lookupWord: (word: string, settings: UserSettings) => Promise<{ definition: string; partOfSpeech?: string }>;
+  lookupWord: (word: string, settings: UserSettings) => Promise<{ definition: string; partOfSpeech?: string; gender?: string; article?: string }>;
   toggleTTS: () => void;
   saveArticle: () => Promise<void>;
   loadSavedArticles: () => Promise<void>;
   clearSavedArticles: () => Promise<void>;
+  deleteArticle: (id: string) => Promise<void>;
   clearError: () => void;
   setCurrentArticle: (article: Article) => void;
 }
@@ -41,22 +43,22 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
     set({ isLoading: true, error: null, wordLookupCache: {}, vocabInputTokens: 0, vocabOutputTokens: 0 });
 
     try {
-      let originalText: string;
+      let rawText: string;
       let sourceUrl = '';
 
       if (isUrl) {
         set({ loadingStep: 'Fetching article…' });
         const scraped = await scrapeArticle(input);
-        originalText = scraped.textContent;
+        rawText = scraped.textContent;
         sourceUrl = input;
       } else {
-        originalText = input;
+        rawText = input;
       }
 
       set({ loadingStep: 'Translating…' });
       const apiKey = settings.apiKey || process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
       const result = await translateArticle(
-        originalText,
+        rawText,
         settings.sourceLanguage,
         settings.targetLanguage,
         apiKey,
@@ -68,8 +70,7 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
         sourceUrl,
         sourceLanguage: settings.sourceLanguage,
         targetLanguage: settings.targetLanguage,
-        originalText,
-        translatedText: result.translation,
+        sentencePairs: result.sentencePairs,
         vocabList: result.vocab,
         createdAt: Date.now(),
         inputTokens: result.inputTokens,
@@ -77,6 +78,7 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
       };
 
       set({ currentArticle: article, isLoading: false, loadingStep: 'Done' });
+      useUsageStore.getState().addArticle(result.inputTokens, result.outputTokens);
     } catch (err) {
       set({
         isLoading: false,
@@ -91,7 +93,7 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
     if (cache[word]) return cache[word];
 
     const apiKey = settings.apiKey || process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
-    const articleText = get().currentArticle?.translatedText;
+    const articleText = get().currentArticle?.sentencePairs.map((p) => p.translation).join(' ');
     const result: LookupResult = await lookupWordDefinition(
       word,
       settings.targetLanguage,
@@ -101,12 +103,14 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
     );
 
     const { vocabInputTokens, vocabOutputTokens } = get();
+    const entry = { definition: result.definition, partOfSpeech: result.partOfSpeech, gender: result.gender, article: result.article };
     set({
-      wordLookupCache: { ...cache, [word]: { definition: result.definition, partOfSpeech: result.partOfSpeech } },
+      wordLookupCache: { ...cache, [word]: entry },
       vocabInputTokens: vocabInputTokens + result.inputTokens,
       vocabOutputTokens: vocabOutputTokens + result.outputTokens,
     });
-    return { definition: result.definition, partOfSpeech: result.partOfSpeech };
+    useUsageStore.getState().addVocab(result.inputTokens, result.outputTokens);
+    return entry;
   },
 
   toggleTTS: () => set((state) => ({ ttsPlaying: !state.ttsPlaying })),
@@ -131,6 +135,11 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
   clearSavedArticles: async () => {
     await apiClearArticles();
     set({ savedArticles: [] });
+  },
+
+  deleteArticle: async (id) => {
+    await apiDeleteArticle(id);
+    set((state) => ({ savedArticles: state.savedArticles.filter((a) => a.id !== id) }));
   },
 
   clearError: () => set({ error: null }),

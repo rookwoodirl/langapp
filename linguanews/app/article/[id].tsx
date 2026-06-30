@@ -1,35 +1,43 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   Alert,
-  ScrollView,
+  FlatList,
   useWindowDimensions,
-  NativeSyntheticEvent,
-  NativeScrollEvent,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useArticleStore } from '../../store/articleStore';
 import { useVocabStore } from '../../store/vocabStore';
-import ArticleText from '../../components/ArticleText';
 import VocabPopup from '../../components/VocabPopup';
 import AudioPlayer from '../../components/AudioPlayer';
+import ParagraphCard from '../../components/ParagraphCard';
 import { getLanguageName } from '../../constants/languages';
 import { getVerbConjugation } from '../../services/vocab';
 import { calcCost, formatCost, formatTokens } from '../../utils/cost';
+import { SentencePair, VerbConjugation } from '../../types';
 
 const SETTINGS_KEY = '@linguanews/settings';
 
 export default function ArticleScreen() {
   const { width } = useWindowDimensions();
+  const cardWidth = width - 32;
+
   const { id } = useLocalSearchParams<{ id: string }>();
   const { currentArticle, savedArticles, lookupWord, saveArticle, vocabInputTokens, vocabOutputTokens } = useArticleStore();
   const { addWord, words: vocabWords } = useVocabStore();
 
   const article = currentArticle?.id === id ? currentArticle : null;
+
+  const pairs = useMemo<SentencePair[]>(() => article?.sentencePairs ?? [], [article?.sentencePairs]);
+
+  const translatedText = useMemo(
+    () => pairs.map((p) => p.translation).join(' '),
+    [pairs]
+  );
 
   const [saving, setSaving] = useState(false);
   const isSaved = savedArticles.some((a) => a.id === id);
@@ -38,22 +46,10 @@ export default function ArticleScreen() {
   const [popupWord, setPopupWord] = useState('');
   const [popupDefinition, setPopupDefinition] = useState<string | null>(null);
   const [popupPos, setPopupPos] = useState<string | undefined>();
+  const [popupGender, setPopupGender] = useState<string | undefined>();
+  const [popupArticle, setPopupArticle] = useState<string | undefined>();
   const [popupLoading, setPopupLoading] = useState(false);
 
-  const [activeView, setActiveView] = useState(0);
-  const pagerRef = useRef<ScrollView>(null);
-
-  function scrollToView(index: number) {
-    pagerRef.current?.scrollTo({ x: index * width, animated: true });
-    setActiveView(index);
-  }
-
-  function handlePagerScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
-    const page = Math.round(e.nativeEvent.contentOffset.x / width);
-    if (page !== activeView) setActiveView(page);
-  }
-
-  // Track which words the user has already added to vocab this session
   const isWordInVocab = (word: string) =>
     vocabWords.some((w) => w.word.toLowerCase() === word.toLowerCase());
 
@@ -70,10 +66,11 @@ export default function ArticleScreen() {
 
   async function handleWordTap(word: string, definition?: string, partOfSpeech?: string) {
     if (!word.trim()) return;
-
     setPopupWord(word);
     setPopupDefinition(definition ?? null);
     setPopupPos(partOfSpeech);
+    setPopupGender(undefined);
+    setPopupArticle(undefined);
     setPopupVisible(true);
 
     if (!definition) {
@@ -84,6 +81,8 @@ export default function ArticleScreen() {
         const result = await lookupWord(word, settings);
         setPopupDefinition(result.definition);
         if (result.partOfSpeech) setPopupPos(result.partOfSpeech);
+        if (result.gender) setPopupGender(result.gender);
+        if (result.article) setPopupArticle(result.article);
       } catch (err) {
         setPopupDefinition('Could not load definition.');
         Alert.alert('Lookup failed', err instanceof Error ? err.message : String(err));
@@ -99,17 +98,22 @@ export default function ArticleScreen() {
     const settings = raw ? JSON.parse(raw) : {};
     const apiKey = settings.apiKey || process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
 
-    let conjugation: { infinitive: string; present: string[] } | undefined;
     const isVerb = popupPos?.toLowerCase().includes('verb');
+    let conjugation: VerbConjugation | undefined;
+    let saveWord = popupWord;
+
     if (isVerb && apiKey) {
       conjugation = (await getVerbConjugation(popupWord, article.targetLanguage, apiKey)) ?? undefined;
+      if (conjugation?.infinitive) saveWord = conjugation.infinitive;
     }
 
     await addWord({
-      word: popupWord,
+      word: saveWord,
       language: article.targetLanguage,
       definition: popupDefinition ?? '',
       partOfSpeech: popupPos,
+      gender: popupGender,
+      article: popupArticle,
       conjugation,
     });
   }
@@ -124,9 +128,7 @@ export default function ArticleScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.langBar}>
-        <Text style={styles.langText}>
-          {fromName} → {toName}
-        </Text>
+        <Text style={styles.langText}>{fromName} → {toName}</Text>
         <TouchableOpacity
           style={[styles.saveButton, isSaved && styles.saveButtonDone]}
           disabled={isSaved || saving}
@@ -158,57 +160,30 @@ export default function ArticleScreen() {
         </View>
       )}
 
-      <View style={styles.viewToggle}>
-        {['Translation', 'Original'].map((label, i) => (
-          <TouchableOpacity
-            key={label}
-            style={[styles.viewToggleBtn, activeView === i && styles.viewToggleBtnActive]}
-            onPress={() => scrollToView(i)}
-            activeOpacity={0.75}
-          >
-            <Text style={[styles.viewToggleText, activeView === i && styles.viewToggleTextActive]}>
-              {label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <ScrollView
-        ref={pagerRef}
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        scrollEventThrottle={16}
-        onMomentumScrollEnd={handlePagerScroll}
-        style={styles.pager}
-      >
-        <View style={{ width }}>
-          <ArticleText
-            text={article.translatedText}
+      <FlatList
+        data={pairs}
+        keyExtractor={(_, i) => String(i)}
+        renderItem={({ item }) => (
+          <ParagraphCard
+            pair={item}
             vocabList={article.vocabList}
+            cardWidth={cardWidth}
             onWordTap={handleWordTap}
           />
-        </View>
-        <View style={{ width }}>
-          <ScrollView contentContainerStyle={styles.originalContent}>
-            {article.originalText ? (
-              <Text style={styles.originalText}>{article.originalText}</Text>
-            ) : (
-              <Text style={styles.originalUnavailable}>
-                Original text is not available for saved articles.
-              </Text>
-            )}
-          </ScrollView>
-        </View>
-      </ScrollView>
+        )}
+        contentContainerStyle={styles.listContent}
+        style={styles.list}
+      />
 
-      <AudioPlayer text={article.translatedText} language={article.targetLanguage} />
+      <AudioPlayer text={translatedText} language={article.targetLanguage} />
 
       <VocabPopup
         visible={popupVisible}
         word={popupWord}
         definition={popupDefinition}
         partOfSpeech={popupPos}
+        gender={popupGender}
+        article={popupArticle}
         isLoading={popupLoading}
         isAdded={isWordInVocab(popupWord)}
         onClose={() => setPopupVisible(false)}
@@ -219,7 +194,7 @@ export default function ArticleScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
+  container: { flex: 1, backgroundColor: '#f2f4f8' },
   langBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -250,37 +225,9 @@ const styles = StyleSheet.create({
     borderBottomColor: '#eee',
   },
   costText: { fontSize: 12, color: '#aaa' },
+  list: { flex: 1 },
+  listContent: { padding: 16, paddingBottom: 120 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
   errorText: { fontSize: 16, color: '#555' },
   link: { fontSize: 15, color: '#4A90D9' },
-
-  viewToggle: {
-    flexDirection: 'row',
-    marginHorizontal: 16,
-    marginVertical: 8,
-    backgroundColor: '#e8ecf0',
-    borderRadius: 10,
-    padding: 3,
-  },
-  viewToggleBtn: {
-    flex: 1,
-    paddingVertical: 7,
-    alignItems: 'center',
-    borderRadius: 8,
-  },
-  viewToggleBtnActive: {
-    backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 2,
-  },
-  viewToggleText: { fontSize: 13, fontWeight: '600', color: '#888' },
-  viewToggleTextActive: { color: '#111' },
-
-  pager: { flex: 1 },
-  originalContent: { padding: 20, paddingBottom: 120 },
-  originalText: { fontSize: 17, lineHeight: 28, color: '#111' },
-  originalUnavailable: { fontSize: 15, color: '#aaa', textAlign: 'center', marginTop: 40 },
 });

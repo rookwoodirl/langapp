@@ -1,8 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { VocabWord } from '../types';
+import { VocabWord, SentencePair } from '../types';
 
 export interface TranslationResult {
   translation: string;
+  sentencePairs: SentencePair[];
   vocab: VocabWord[];
   inputTokens: number;
   outputTokens: number;
@@ -34,9 +35,16 @@ function buildSystemPrompt(sourceLanguage: string, targetLanguage: string, diffi
     `You are a language translation assistant. You will receive article text in ${sourceLanguage}.\n` +
     `Reading difficulty: ${difficulty}. ${difficultyNote}\n\n` +
     `Return a JSON object with exactly two keys:\n` +
-    `- "translation": the full article translated into ${targetLanguage}, preserving paragraph breaks with \\n\\n\n` +
-    `- "vocab": an array of 10–20 key vocabulary objects, each with "word" (as it appears in the translation), ` +
-    `"definition" (explained in ${sourceLanguage}), and "partOfSpeech"\n\n` +
+    `- "sentences": an array of objects, one per sentence from the source text, in order. Each object has:\n` +
+    `  - "original": the sentence exactly as it appears in the source\n` +
+    `  - "translation": that sentence translated into ${targetLanguage}\n` +
+    `  Split on sentence-ending punctuation (., !, ?). Do not skip or merge sentences.\n` +
+    `- "vocab": an array of 10–20 key vocabulary objects from the translations, written as a translation dictionary would. Each object has:\n` +
+    `  - "word": as it appears in the translations\n` +
+    `  - "definition": in ${sourceLanguage}; for verbs begin with "to" (e.g. "to run"); for nouns use a short noun phrase\n` +
+    `  - "partOfSpeech": grammatical category\n` +
+    `  - "gender": for nouns — "masculine", "feminine", "neuter", or "common"; omit for non-nouns\n` +
+    `  - "article": for nouns — the definite article in ${targetLanguage}; omit for non-nouns\n\n` +
     `Respond with raw JSON only. No markdown, no code fences, no preamble.`
   );
 }
@@ -57,7 +65,7 @@ async function callClaude(
 ): Promise<{ json: string; inputTokens: number; outputTokens: number }> {
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 8192,
+    max_tokens: 32768,
     system: systemPrompt,
     messages: [{ role: 'user', content: userMessage }],
   });
@@ -90,11 +98,10 @@ export async function translateArticle(
   let totalInput = result.inputTokens;
   let totalOutput = result.outputTokens;
 
-  let parsed: { translation: string; vocab: VocabWord[] };
+  let parsed: { sentences: SentencePair[]; vocab: VocabWord[] };
   try {
     parsed = JSON.parse(result.json);
   } catch {
-    // Retry once, asking Claude to fix the JSON
     result = await callClaude(
       client,
       systemPrompt,
@@ -105,12 +112,16 @@ export async function translateArticle(
     parsed = JSON.parse(result.json);
   }
 
-  if (!parsed.translation || !Array.isArray(parsed.vocab)) {
+  if (!Array.isArray(parsed.sentences) || !Array.isArray(parsed.vocab)) {
     throw new Error('Unexpected response structure from translation API.');
   }
 
+  const sentencePairs: SentencePair[] = parsed.sentences;
+  const translation = sentencePairs.map((s) => s.translation).join(' ');
+
   return {
-    translation: parsed.translation,
+    translation,
+    sentencePairs,
     vocab: parsed.vocab,
     inputTokens: totalInput,
     outputTokens: totalOutput,

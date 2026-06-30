@@ -54,6 +54,9 @@ async function migrate() {
   await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS input_tokens  INTEGER NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS output_tokens INTEGER NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS original_text TEXT`);
+  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS sentence_pairs JSONB NOT NULL DEFAULT '[]'`);
+  await pool.query(`ALTER TABLE vocab_words ADD COLUMN IF NOT EXISTS gender TEXT`);
+  await pool.query(`ALTER TABLE vocab_words ADD COLUMN IF NOT EXISTS article TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vocab_words (

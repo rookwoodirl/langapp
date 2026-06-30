@@ -10,6 +10,8 @@ interface VocabStore {
     language: string;
     definition: string;
     partOfSpeech?: string;
+    gender?: string;
+    article?: string;
     conjugation?: VerbConjugation;
   }) => Promise<void>;
   removeWord: (userVocabId: string) => Promise<void>;
@@ -33,6 +35,8 @@ export const useVocabStore = create<VocabStore>((set, get) => ({
       language: params.language,
       definition: params.definition,
       partOfSpeech: params.partOfSpeech,
+      gender: params.gender,
+      article: params.article,
       conjugation: params.conjugation,
       addedAt: Date.now(),
     };

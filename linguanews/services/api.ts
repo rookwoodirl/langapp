@@ -32,13 +32,18 @@ async function parseJson(res: Response): Promise<unknown> {
 }
 
 function rowToArticle(row: Record<string, unknown>): Article {
+  const originals: string[] = Array.isArray(row.original_sentences) ? row.original_sentences as string[] : [];
+  const translations: string[] = Array.isArray(row.translated_sentences) ? row.translated_sentences as string[] : [];
+  const sentencePairs = translations.map((translation, i) => ({
+    original: originals[i] ?? '',
+    translation,
+  }));
   return {
     id: row.id as string,
     sourceUrl: (row.url as string) ?? '',
     sourceLanguage: row.source_language as string,
     targetLanguage: row.target_language as string,
-    originalText: (row.original_text as string) ?? '',
-    translatedText: (row.translated_text as string) ?? '',
+    sentencePairs,
     vocabList: Array.isArray(row.vocab) ? row.vocab : [],
     createdAt: new Date(row.created_at as string).getTime(),
     inputTokens: (row.input_tokens as number) ?? 0,
@@ -57,8 +62,7 @@ export async function apiSaveArticle(article: Article): Promise<string> {
       title: null,
       source_language: article.sourceLanguage,
       target_language: article.targetLanguage,
-      original_text: article.originalText || null,
-      translated_text: article.translatedText,
+      sentence_pairs: article.sentencePairs ?? [],
       vocab: article.vocabList,
       input_tokens: article.inputTokens ?? 0,
       output_tokens: article.outputTokens ?? 0,
@@ -99,6 +103,8 @@ function rowToVocabWord(row: Record<string, unknown>): UserVocabWord {
     language: row.language as string,
     definition: row.definition as string,
     partOfSpeech: (row.part_of_speech as string) ?? undefined,
+    gender: (row.gender as string) ?? undefined,
+    article: (row.article as string) ?? undefined,
     conjugation: (row.conjugation as VerbConjugation) ?? undefined,
     addedAt: new Date(row.added_at as string).getTime(),
   };
@@ -109,6 +115,8 @@ export async function apiAddVocabWord(params: {
   language: string;
   definition: string;
   partOfSpeech?: string;
+  gender?: string;
+  article?: string;
   conjugation?: VerbConjugation;
 }): Promise<void> {
   const userId = await getUserId();
@@ -121,6 +129,8 @@ export async function apiAddVocabWord(params: {
       language: params.language,
       definition: params.definition,
       part_of_speech: params.partOfSpeech ?? null,
+      gender: params.gender ?? null,
+      article: params.article ?? null,
       conjugation: params.conjugation ?? null,
     }),
   });

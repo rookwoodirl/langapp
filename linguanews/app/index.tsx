@@ -6,6 +6,8 @@ import {
   StyleSheet,
   ActivityIndicator,
   Alert,
+  Modal,
+  Pressable,
   ScrollView,
   FlatList,
   useWindowDimensions,
@@ -20,11 +22,15 @@ import { useArticle } from '../hooks/useArticle';
 import LanguagePicker from '../components/LanguagePicker';
 import { UserSettings, Article, UserVocabWord, DifficultyLevel } from '../types';
 import { DEFAULT_SOURCE_LANGUAGE, DEFAULT_TARGET_LANGUAGE } from '../constants/languages';
-
-const DIFFICULTIES: DifficultyLevel[] = ['beginner', 'intermediate', 'advanced'];
 import { useArticleStore } from '../store/articleStore';
 import { useVocabStore } from '../store/vocabStore';
 import { calcCost, formatCost, formatTokens } from '../utils/cost';
+import { generateRecommendedVocab } from '../services/vocab';
+import ConjugationModal from '../components/ConjugationModal';
+import { VerbConjugation } from '../types';
+import { useUsageStore } from '../store/usageStore';
+
+const DIFFICULTIES: DifficultyLevel[] = ['beginner', 'intermediate', 'advanced'];
 
 const SETTINGS_KEY = '@linguanews/settings';
 
@@ -45,13 +51,21 @@ export default function HomeScreen() {
   });
 
   const { fetchArticle, isLoading, loadingStep, error, currentArticle } = useArticle();
-  const { savedArticles, loadSavedArticles, setCurrentArticle } = useArticleStore();
-  const { words: vocabWords, loadVocab, removeWord } = useVocabStore();
+  const { savedArticles, loadSavedArticles, setCurrentArticle, deleteArticle } = useArticleStore();
+  const { words: vocabWords, loadVocab, removeWord, addWord } = useVocabStore();
+
+  const { article: articleUsage, vocab: vocabUsage, audio: audioUsage, load: loadUsage } = useUsageStore();
+
+  const [vocabModalArticle, setVocabModalArticle] = useState<Article | null>(null);
+  const [contextMenu, setContextMenu] = useState<Article | null>(null);
+  const [regenLoading, setRegenLoading] = useState(false);
+  const [conjModal, setConjModal] = useState<{ infinitive: string; conjugation: VerbConjugation } | null>(null);
 
   useEffect(() => {
     AsyncStorage.getItem(SETTINGS_KEY).then((raw) => {
       if (raw) setSettings(JSON.parse(raw));
     });
+    loadUsage();
   }, []);
 
   useEffect(() => {
@@ -91,6 +105,51 @@ export default function HomeScreen() {
       return;
     }
     await fetchArticle(url.trim(), true, settings);
+  }
+
+  async function handleGenerateVocab(article: Article) {
+    const apiKey = settings.apiKey || process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
+    if (!apiKey) { Alert.alert('No API key', 'Add your Anthropic API key in Settings.'); return; }
+    setRegenLoading(true);
+    try {
+      const existing = vocabWords.map((w) => w.word);
+      const articleText = article.sentencePairs.map((p) => p.translation).join(' ');
+      const result = await generateRecommendedVocab(
+        articleText, article.targetLanguage, article.sourceLanguage, existing, apiKey
+      );
+      useUsageStore.getState().addVocab(result.inputTokens, result.outputTokens);
+      for (const word of result.words) {
+        await addWord({ word: word.word, language: article.targetLanguage, definition: word.definition, partOfSpeech: word.partOfSpeech });
+      }
+      Alert.alert('Vocab added', `Added ${result.words.length} recommended words to your vocab list.`);
+    } catch (err) {
+      Alert.alert('Error', err instanceof Error ? err.message : 'Failed to generate vocab.');
+    } finally {
+      setRegenLoading(false);
+    }
+  }
+
+  function handleRetranslate(article: Article) {
+    if (!article.sourceUrl) {
+      Alert.alert('No URL', 'This article was pasted as text and has no URL to re-translate from.');
+      return;
+    }
+    setUrl(article.sourceUrl);
+    scrollToTab(0);
+  }
+
+  async function handleDeleteArticle(article: Article) {
+    Alert.alert('Delete article?', 'This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try { await deleteArticle(article.id); }
+          catch { Alert.alert('Error', 'Could not delete article.'); }
+        },
+      },
+    ]);
   }
 
   function scrollToTab(index: number) {
@@ -189,8 +248,10 @@ export default function HomeScreen() {
   );
 
   // ── Articles page ───────────────────────────────────────────────────────────
-  const totalArticleTokens = savedArticles.reduce((s, a) => s + (a.inputTokens ?? 0) + (a.outputTokens ?? 0), 0);
-  const totalArticleCost = savedArticles.reduce((s, a) => s + calcCost(a.inputTokens ?? 0, a.outputTokens ?? 0), 0);
+  const articleCost = calcCost(articleUsage.input, articleUsage.output);
+  const vocabCost = calcCost(vocabUsage.input, vocabUsage.output);
+  const audioCost = calcCost(audioUsage.input, audioUsage.output);
+  const lifetimeCost = articleCost + vocabCost + audioCost;
 
   const articlesPage = (
     <FlatList
@@ -199,24 +260,32 @@ export default function HomeScreen() {
       data={savedArticles}
       keyExtractor={(a) => a.id}
       ListHeaderComponent={
-        savedArticles.length > 0 ? (
-          <View style={styles.statsBanner}>
+        <View style={styles.statsBanner}>
+          <View style={styles.statsTopRow}>
             <View style={styles.statItem}>
               <Text style={styles.statValue}>{savedArticles.length}</Text>
-              <Text style={styles.statLabel}>articles</Text>
+              <Text style={styles.statLabel}>saved</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>{formatTokens(totalArticleTokens)}</Text>
-              <Text style={styles.statLabel}>tokens</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statItem}>
-              <Text style={styles.statValue}>{formatCost(totalArticleCost)}</Text>
-              <Text style={styles.statLabel}>total cost</Text>
+              <Text style={styles.statValue}>{formatCost(lifetimeCost)}</Text>
+              <Text style={styles.statLabel}>lifetime total</Text>
             </View>
           </View>
-        ) : null
+          {lifetimeCost > 0 && (
+            <View style={styles.statsBreakdown}>
+              <Text style={styles.breakdownItem}>Articles {formatCost(articleCost)}</Text>
+              <Text style={styles.breakdownDot}>·</Text>
+              <Text style={styles.breakdownItem}>Vocab {formatCost(vocabCost)}</Text>
+              {audioCost > 0 && (
+                <>
+                  <Text style={styles.breakdownDot}>·</Text>
+                  <Text style={styles.breakdownItem}>Audio {formatCost(audioCost)}</Text>
+                </>
+              )}
+            </View>
+          )}
+        </View>
       }
       ListEmptyComponent={
         <View style={styles.emptyState}>
@@ -232,21 +301,7 @@ export default function HomeScreen() {
           <TouchableOpacity
             style={styles.articleCard}
             onPress={() => handleArticleTap(item)}
-            onLongPress={() => {
-              Alert.alert('Article', undefined, [
-                {
-                  text: 'Copy Link',
-                  onPress: () => {
-                    if (item.sourceUrl) {
-                      Clipboard.setStringAsync(item.sourceUrl);
-                    } else {
-                      Alert.alert('No link', 'This article has no source URL.');
-                    }
-                  },
-                },
-                { text: 'Cancel', style: 'cancel' },
-              ]);
-            }}
+            onLongPress={() => setContextMenu(item)}
             activeOpacity={0.8}
           >
             <View style={styles.articleMeta}>
@@ -257,7 +312,7 @@ export default function HomeScreen() {
               <Text style={styles.articleUrl} numberOfLines={1}>{item.sourceUrl}</Text>
             ) : null}
             <Text style={styles.articlePreview} numberOfLines={3}>
-              {item.translatedText}
+              {item.sentencePairs.map((p) => p.translation).join(' ')}
             </Text>
             {articleTokens > 0 && (
               <Text style={styles.articleCost}>
@@ -288,8 +343,11 @@ export default function HomeScreen() {
         <View style={styles.vocabCard}>
           <View style={styles.vocabHeader}>
             <View style={styles.vocabWordRow}>
-              <Text style={styles.vocabWord}>{item.word}</Text>
+              <Text style={styles.vocabWord}>
+                {item.article ? `${item.article} ` : ''}{item.word}
+              </Text>
               {item.partOfSpeech ? <Text style={styles.vocabPos}>{item.partOfSpeech}</Text> : null}
+              {item.gender ? <Text style={styles.vocabGender}>{item.gender}</Text> : null}
             </View>
             <TouchableOpacity onPress={() => removeWord(item.id)} hitSlop={8}>
               <Text style={styles.vocabRemove}>✕</Text>
@@ -297,10 +355,12 @@ export default function HomeScreen() {
           </View>
           <Text style={styles.vocabDefinition}>{item.definition}</Text>
           {item.conjugation && (
-            <View style={styles.conjugationBox}>
-              <Text style={styles.conjugationInfinitive}>∞ {item.conjugation.infinitive}</Text>
-              <Text style={styles.conjugationForms}>{item.conjugation.present.join('  ·  ')}</Text>
-            </View>
+            <TouchableOpacity
+              style={styles.conjBtn}
+              onPress={() => setConjModal({ infinitive: item.conjugation!.infinitive, conjugation: item.conjugation! })}
+            >
+              <Text style={styles.conjBtnText}>Conjugations</Text>
+            </TouchableOpacity>
           )}
         </View>
       )}
@@ -346,6 +406,92 @@ export default function HomeScreen() {
         {articlesPage}
         {vocabPage}
       </ScrollView>
+
+      {/* Regen loading overlay */}
+      {regenLoading && (
+        <View style={styles.regenOverlay}>
+          <ActivityIndicator color="#fff" size="large" />
+          <Text style={styles.regenText}>Generating vocab…</Text>
+        </View>
+      )}
+
+      {/* Conjugation modal (vocab tab) */}
+      {conjModal && (
+        <ConjugationModal
+          visible={!!conjModal}
+          infinitive={conjModal.infinitive}
+          conjugation={conjModal.conjugation}
+          onClose={() => setConjModal(null)}
+        />
+      )}
+
+      {/* Article long-press context menu */}
+      <Modal
+        visible={!!contextMenu}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setContextMenu(null)}
+      >
+        <Pressable style={styles.menuBackdrop} onPress={() => setContextMenu(null)} />
+        <View style={styles.menuSheet}>
+          <View style={styles.menuHandle} />
+          <TouchableOpacity style={styles.menuItem} onPress={() => { setVocabModalArticle(contextMenu); setContextMenu(null); }}>
+            <Text style={styles.menuItemText}>View Vocab</Text>
+          </TouchableOpacity>
+          <View style={styles.menuDivider} />
+          <TouchableOpacity style={styles.menuItem} onPress={() => { const a = contextMenu; setContextMenu(null); handleGenerateVocab(a!); }}>
+            <Text style={styles.menuItemText}>Generate Recommended Vocab</Text>
+          </TouchableOpacity>
+          <View style={styles.menuDivider} />
+          <TouchableOpacity style={styles.menuItem} onPress={() => { const a = contextMenu; setContextMenu(null); handleRetranslate(a!); }}>
+            <Text style={styles.menuItemText}>Re-translate</Text>
+          </TouchableOpacity>
+          {contextMenu?.sourceUrl ? (
+            <>
+              <View style={styles.menuDivider} />
+              <TouchableOpacity style={styles.menuItem} onPress={() => { Clipboard.setStringAsync(contextMenu.sourceUrl); setContextMenu(null); }}>
+                <Text style={styles.menuItemText}>Copy Link</Text>
+              </TouchableOpacity>
+            </>
+          ) : null}
+          <View style={[styles.menuDivider, styles.menuSectionGap]} />
+          <TouchableOpacity style={styles.menuItem} onPress={() => { const a = contextMenu; setContextMenu(null); handleDeleteArticle(a!); }}>
+            <Text style={[styles.menuItemText, styles.menuItemDestructive]}>Delete</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
+      {/* Article vocab modal */}
+      <Modal
+        visible={!!vocabModalArticle}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setVocabModalArticle(null)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setVocabModalArticle(null)} />
+        <View style={styles.modalSheet}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>Article Vocab</Text>
+          <FlatList
+            data={vocabModalArticle?.vocabList ?? []}
+            keyExtractor={(w, i) => `${w.word}-${i}`}
+            renderItem={({ item: w }) => (
+              <View style={styles.modalVocabItem}>
+                <View style={styles.vocabWordRow}>
+                  <Text style={styles.vocabWord}>{w.word}</Text>
+                  {w.partOfSpeech ? <Text style={styles.vocabPos}>{w.partOfSpeech}</Text> : null}
+                </View>
+                <Text style={styles.vocabDefinition}>{w.definition}</Text>
+              </View>
+            )}
+            ListEmptyComponent={<Text style={styles.modalEmpty}>No vocab for this article.</Text>}
+            style={styles.modalList}
+          />
+          <TouchableOpacity style={styles.modalDoneBtn} onPress={() => setVocabModalArticle(null)}>
+            <Text style={styles.modalDoneBtnText}>Done</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -495,7 +641,6 @@ const styles = StyleSheet.create({
   emptySubtitle: { fontSize: 14, color: '#888', textAlign: 'center', lineHeight: 20 },
 
   statsBanner: {
-    flexDirection: 'row',
     backgroundColor: '#fff',
     borderRadius: 14,
     padding: 16,
@@ -505,6 +650,9 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
     elevation: 2,
+  },
+  statsTopRow: {
+    flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
   },
@@ -512,6 +660,18 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 18, fontWeight: '800', color: '#111' },
   statLabel: { fontSize: 11, color: '#888', marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
   statDivider: { width: 1, height: 32, backgroundColor: '#eee' },
+  statsBreakdown: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#eee',
+    gap: 6,
+  },
+  breakdownItem: { fontSize: 12, color: '#777' },
+  breakdownDot: { fontSize: 12, color: '#ccc' },
 
   articleCard: {
     backgroundColor: '#fff',
@@ -564,6 +724,74 @@ const styles = StyleSheet.create({
     padding: 10,
     gap: 4,
   },
-  conjugationInfinitive: { fontSize: 13, fontWeight: '700', color: '#4A90D9' },
-  conjugationForms: { fontSize: 13, color: '#555', lineHeight: 18 },
+  vocabGender: {
+    fontSize: 12, color: '#4A90D9', fontStyle: 'italic',
+    backgroundColor: '#eef4fd', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
+  },
+  conjBtn: {
+    marginTop: 10, borderWidth: 1.5, borderColor: '#4A90D9',
+    borderRadius: 8, paddingVertical: 7, alignItems: 'center',
+  },
+  conjBtnText: { fontSize: 13, fontWeight: '600', color: '#4A90D9' },
+
+  // Regen loading overlay
+  regenOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 14,
+  },
+  regenText: { fontSize: 15, color: '#fff', fontWeight: '600' },
+
+  // Context menu
+  menuBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
+  menuSheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 36,
+    paddingTop: 12,
+    overflow: 'hidden',
+  },
+  menuHandle: {
+    width: 40, height: 4, borderRadius: 2, backgroundColor: '#ddd',
+    alignSelf: 'center', marginBottom: 8,
+  },
+  menuItem: {
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+  },
+  menuItemText: { fontSize: 16, color: '#111' },
+  menuItemDestructive: { color: '#d9311a' },
+  menuDivider: { height: StyleSheet.hairlineWidth, backgroundColor: '#eee', marginHorizontal: 24 },
+  menuSectionGap: { marginTop: 8 },
+
+  // Vocab modal
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
+  modalSheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 36,
+    paddingTop: 12,
+  },
+  modalHandle: {
+    width: 40, height: 4, borderRadius: 2, backgroundColor: '#ddd',
+    alignSelf: 'center', marginBottom: 16,
+  },
+  modalTitle: { fontSize: 17, fontWeight: '700', color: '#111', marginBottom: 12 },
+  modalList: { maxHeight: 420 },
+  modalVocabItem: {
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#eee',
+  },
+  modalEmpty: { fontSize: 14, color: '#aaa', textAlign: 'center', paddingVertical: 20 },
+  modalDoneBtn: {
+    marginTop: 16, backgroundColor: '#4A90D9', borderRadius: 12,
+    paddingVertical: 14, alignItems: 'center',
+  },
+  modalDoneBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
 });

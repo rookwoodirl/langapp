@@ -5,7 +5,7 @@ const router = Router();
 
 // Add a word to user's vocab (upserts vocab_words globally, then links to user)
 router.post('/', async (req: Request, res: Response) => {
-  const { user_id, word, language, definition, part_of_speech, conjugation } = req.body;
+  const { user_id, word, language, definition, part_of_speech, gender, article, conjugation } = req.body;
 
   if (!user_id || !word || !language || !definition) {
     return res.status(400).json({ error: 'user_id, word, language, definition are required' });
@@ -14,14 +14,16 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     // Upsert the global word record
     const wordResult = await pool.query(
-      `INSERT INTO vocab_words (word, language, definition, part_of_speech, conjugation)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO vocab_words (word, language, definition, part_of_speech, gender, article, conjugation)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (word, language) DO UPDATE
          SET definition = EXCLUDED.definition,
              part_of_speech = EXCLUDED.part_of_speech,
+             gender = COALESCE(EXCLUDED.gender, vocab_words.gender),
+             article = COALESCE(EXCLUDED.article, vocab_words.article),
              conjugation = COALESCE(EXCLUDED.conjugation, vocab_words.conjugation)
        RETURNING id`,
-      [word, language, definition, part_of_speech ?? null, conjugation ? JSON.stringify(conjugation) : null]
+      [word, language, definition, part_of_speech ?? null, gender ?? null, article ?? null, conjugation ? JSON.stringify(conjugation) : null]
     );
 
     const vocabWordId = wordResult.rows[0].id;
@@ -58,7 +60,7 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const result = await pool.query(
       `SELECT uv.id, uv.added_at, vw.id AS vocab_word_id,
-              vw.word, vw.language, vw.definition, vw.part_of_speech, vw.conjugation
+              vw.word, vw.language, vw.definition, vw.part_of_speech, vw.gender, vw.article, vw.conjugation
        FROM user_vocab uv
        JOIN vocab_words vw ON vw.id = uv.vocab_word_id
        WHERE uv.user_id = $1
