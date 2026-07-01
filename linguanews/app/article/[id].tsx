@@ -171,14 +171,13 @@ export default function ArticleScreen() {
 
   async function handleAddToVocab() {
     if (!article) return;
-    const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
 
     const isVerb = popupPos?.toLowerCase().includes('verb');
     let conjugation: VerbConjugation | undefined;
     let saveWord = popupWord;
 
-    if (isVerb && apiKey) {
-      conjugation = (await getVerbConjugation(popupWord, article.targetLanguage, apiKey)) ?? undefined;
+    if (isVerb) {
+      conjugation = (await getVerbConjugation(popupWord, article.targetLanguage)) ?? undefined;
       if (conjugation?.infinitive) saveWord = conjugation.infinitive;
     }
 

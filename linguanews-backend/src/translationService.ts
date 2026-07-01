@@ -76,6 +76,95 @@ async function processLine(
   }
 }
 
+export async function runContinuationJob(
+  articleId: string,
+  userId: string,
+  remainingText: string,
+  sourceLanguage: string,
+  targetLanguage: string,
+  nativeLanguage: string,
+  difficulty: string,
+  startRowOrder: number,
+): Promise<void> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    await pool.query(
+      `UPDATE articles SET status = 'error', status_message = $1 WHERE id = $2`,
+      ['ANTHROPIC_API_KEY is not configured on the server.', articleId],
+    );
+    return;
+  }
+
+  const client = new Anthropic({ apiKey });
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  const rowOrderRef = { value: startRowOrder };
+  // Pass non-null so processLine skips title extraction
+  const resolvedTitleRef: { value: string | null } = { value: 'existing' };
+
+  const chunks: string[] = [];
+  for (let i = 0; i < remainingText.length; i += CHUNK_SIZE) {
+    chunks.push(remainingText.slice(i, i + CHUNK_SIZE));
+  }
+
+  try {
+    for (const chunk of chunks) {
+      const system = buildSystem(sourceLanguage, targetLanguage, difficulty, nativeLanguage, false);
+      let buffer = '';
+
+      const stream = await client.messages.create({
+        model: MODEL,
+        max_tokens: 32768,
+        system,
+        messages: [{ role: 'user', content: chunk }],
+        stream: true,
+      });
+
+      for await (const event of stream) {
+        if (event.type === 'message_start') {
+          totalInputTokens += event.message.usage?.input_tokens ?? 0;
+        }
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+          buffer += event.delta.text;
+          let newlineIdx: number;
+          while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, newlineIdx);
+            buffer = buffer.slice(newlineIdx + 1);
+            await processLine(line, articleId, rowOrderRef, resolvedTitleRef, sourceLanguage, targetLanguage);
+          }
+        }
+        if (event.type === 'message_delta') {
+          totalOutputTokens += event.usage?.output_tokens ?? 0;
+        }
+      }
+
+      if (buffer.trim()) {
+        await processLine(buffer, articleId, rowOrderRef, resolvedTitleRef, sourceLanguage, targetLanguage);
+      }
+    }
+
+    await pool.query(
+      `INSERT INTO api_costs (user_id, source, model, language, input_credit_rate, total_input_credits, output_credit_rate, total_output_credits, article_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [userId, 'article', MODEL, targetLanguage, INPUT_RATE, totalInputTokens, OUTPUT_RATE, totalOutputTokens, articleId],
+    );
+
+    await pool.query(
+      `UPDATE articles
+       SET status = 'complete', remaining_text = NULL,
+           input_tokens = input_tokens + $1, output_tokens = output_tokens + $2
+       WHERE id = $3`,
+      [totalInputTokens, totalOutputTokens, articleId],
+    );
+  } catch (err) {
+    console.error(`Continuation job failed for article ${articleId}:`, err);
+    await pool.query(
+      `UPDATE articles SET status = 'error', status_message = $1 WHERE id = $2`,
+      [err instanceof Error ? err.message : 'Translation failed', articleId],
+    );
+  }
+}
+
 export async function runTranslationJob(
   articleId: string,
   userId: string,

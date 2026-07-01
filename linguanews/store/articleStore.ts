@@ -1,9 +1,8 @@
 import { create } from 'zustand';
 import { Article, SentencePair, UserSettings } from '../types';
 import { scrapeArticle } from '../services/scraper';
-import { translateArticle } from '../services/translator';
 import { lookupWordDefinition, LookupResult } from '../services/vocab';
-import { apiSaveArticle, apiLoadArticles, apiLoadArticle, apiDeleteArticle, apiClearArticles, apiPatchArticle, apiStartTranslation } from '../services/api';
+import { apiSaveArticle, apiLoadArticles, apiLoadArticle, apiDeleteArticle, apiClearArticles, apiPatchArticle, apiStartTranslation, apiContinueTranslation } from '../services/api';
 import { useUsageStore } from './usageStore';
 import { CostSource } from '../services/apiCosts';
 
@@ -122,50 +121,29 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
   },
 
   continueTranslation: async (settings) => {
-    const { currentArticle, savedArticles } = get();
-    if (!currentArticle?.remainingText) return;
+    const { currentArticle } = get();
+    if (!currentArticle?.remainingText || !currentArticle?.id) return;
 
-    set({ isLoading: true, loadingStep: 'Translating more…', error: null });
+    set({ isLoading: true, loadingStep: 'Resuming translation…', error: null });
     try {
-      const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
-      const result = await translateArticle(
-        currentArticle.remainingText,
-        currentArticle.sourceLanguage,
-        currentArticle.targetLanguage,
-        apiKey,
-        settings.difficulty ?? 'intermediate',
-        'article',
-      );
-
-      const updated: Article = {
-        ...currentArticle,
-        sentencePairs: [...currentArticle.sentencePairs, ...result.sentencePairs],
-        inputTokens: currentArticle.inputTokens + result.inputTokens,
-        outputTokens: currentArticle.outputTokens + result.outputTokens,
-        remainingText: result.remainingText,
-      };
-
-      const isSaved = savedArticles.some((a) => a.id === currentArticle.id);
-      if (isSaved) {
-        await apiPatchArticle(currentArticle.id, {
-          sentencePairsToAppend: result.sentencePairs,
-          remainingText: result.remainingText,
-          inputTokens: result.inputTokens,
-          outputTokens: result.outputTokens,
-        });
-        set({
-          currentArticle: updated,
-          savedArticles: savedArticles.map((a) => (a.id === updated.id ? updated : a)),
-        });
-      } else {
-        set({ currentArticle: updated });
-      }
-
-      useUsageStore.getState().addArticle(result.inputTokens, result.outputTokens);
+      await apiContinueTranslation(currentArticle.id, {
+        difficulty: settings.difficulty ?? 'intermediate',
+        nativeLanguage: settings.nativeLanguage ?? 'en',
+      });
+      // Backend is now translating; update local status so polling kicks in
+      const id = currentArticle.id;
+      set((state) => ({
+        isLoading: false,
+        loadingStep: '',
+        currentArticle: state.currentArticle?.id === id
+          ? { ...state.currentArticle, status: 'translating', remainingText: undefined }
+          : state.currentArticle,
+        savedArticles: state.savedArticles.map((a) =>
+          a.id === id ? { ...a, status: 'translating', remainingText: undefined } : a
+        ),
+      }));
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : 'Failed to continue translation.' });
-    } finally {
-      set({ isLoading: false, loadingStep: '' });
+      set({ isLoading: false, loadingStep: '', error: err instanceof Error ? err.message : 'Failed to continue translation.' });
     }
   },
 
@@ -173,14 +151,12 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
     const cache = get().wordLookupCache;
     if (cache[word]) return cache[word];
 
-    const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
     const currentArticle = get().currentArticle;
     const articleText = currentArticle?.sentencePairs.map((p) => p.translation).join(' ');
     const result: LookupResult = await lookupWordDefinition(
       word,
       settings.targetLanguage,
       settings.nativeLanguage ?? 'en',
-      apiKey,
       articleText,
     );
 

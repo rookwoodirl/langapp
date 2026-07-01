@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../db';
-import { runTranslationJob } from '../translationService';
+import { runTranslationJob, runContinuationJob } from '../translationService';
 
 const router = Router();
 
@@ -182,6 +182,51 @@ router.get('/:id', async (req: Request, res: Response) => {
     return res.json(article);
   } catch (err) {
     console.error('GET /articles/:id error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Continue translating an article that has remaining_text (legacy articles)
+router.post('/:id/continue', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { user_id, difficulty, native_language } = req.body;
+
+  if (!user_id) return res.status(400).json({ error: 'user_id is required' });
+
+  try {
+    const articleResult = await pool.query(
+      `SELECT remaining_text, source_language, target_language FROM articles
+       WHERE id = $1 AND user_id = $2 AND deleted = false`,
+      [id, user_id],
+    );
+    if (articleResult.rows.length === 0) return res.status(404).json({ error: 'Article not found' });
+
+    const { remaining_text, source_language, target_language } = articleResult.rows[0];
+    if (!remaining_text) return res.status(400).json({ error: 'No remaining text to translate' });
+
+    const startOrderResult = await pool.query(
+      `SELECT COALESCE(MAX(row_order) + 1, 0) AS next_row FROM article_text WHERE article_id = $1`,
+      [id],
+    );
+    const startRowOrder = parseInt(startOrderResult.rows[0].next_row as string, 10);
+
+    await pool.query(
+      `UPDATE articles SET status = 'translating' WHERE id = $1`,
+      [id],
+    );
+
+    void runContinuationJob(
+      id, user_id as string,
+      remaining_text as string,
+      source_language as string, target_language as string,
+      (native_language as string) ?? 'en',
+      (difficulty as string) ?? 'intermediate',
+      startRowOrder,
+    ).catch((err) => console.error('Unhandled continuation job error:', err));
+
+    return res.json({ status: 'translating' });
+  } catch (err) {
+    console.error('POST /articles/:id/continue error:', err);
     return res.status(500).json({ error: 'Database error' });
   }
 });

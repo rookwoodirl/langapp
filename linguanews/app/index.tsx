@@ -280,8 +280,6 @@ export default function HomeScreen() {
   }
 
   async function handleGenerateVocab(article: Article) {
-    const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
-    if (!apiKey) { Alert.alert('Missing configuration', 'No Anthropic API key is configured for this app.'); return; }
     setRegenLoading(true);
     try {
       const existing = vocabWords.map((w) => w.word);
@@ -289,14 +287,14 @@ export default function HomeScreen() {
 
       // Step 1: pick words (cheap selection call)
       const selection = await selectVocabWords(
-        articleText, article.targetLanguage, settings.nativeLanguage ?? 'en', existing, apiKey
+        articleText, article.targetLanguage, settings.nativeLanguage ?? 'en', existing
       );
       useUsageStore.getState().addVocab(selection.inputTokens, selection.outputTokens);
 
       // Step 2: look up each word through the same pipeline as word taps
       const lookups = await Promise.all(
         selection.words.map((word) =>
-          lookupWordDefinition(word, article.targetLanguage, settings.nativeLanguage ?? 'en', apiKey, articleText)
+          lookupWordDefinition(word, article.targetLanguage, settings.nativeLanguage ?? 'en', articleText)
         )
       );
       useUsageStore.getState().addVocab(
@@ -310,7 +308,7 @@ export default function HomeScreen() {
           const isVerb = lookup.partOfSpeech?.toLowerCase().includes('verb');
           const wordCandidate = lookup.infinitive ?? selection.words[i];
           const conjugation = isVerb
-            ? (await getVerbConjugation(wordCandidate, article.targetLanguage, apiKey)) ?? undefined
+            ? (await getVerbConjugation(wordCandidate, article.targetLanguage)) ?? undefined
             : undefined;
           // Mirror tap flow: conjugation.infinitive takes priority, then lookup.infinitive, then selected word
           const saveWord = conjugation?.infinitive ?? lookup.infinitive ?? selection.words[i];

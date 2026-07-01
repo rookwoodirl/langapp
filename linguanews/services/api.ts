@@ -203,6 +203,115 @@ export async function apiGetCostEvents(filters?: { since?: Date; source?: string
   }
 }
 
+export async function apiContinueTranslation(articleId: string, params: {
+  difficulty: string;
+  nativeLanguage: string;
+}): Promise<void> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/articles/${encodeURIComponent(articleId)}/continue`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: userId,
+      difficulty: params.difficulty,
+      native_language: params.nativeLanguage,
+    }),
+  });
+  if (!res.ok) {
+    const data = await parseJson(res).catch(() => ({})) as Record<string, unknown>;
+    throw new Error((data.error as string) ?? 'Failed to continue translation');
+  }
+}
+
+export async function apiLookupWord(params: {
+  word: string;
+  targetLanguage: string;
+  nativeLanguage: string;
+  articleContext?: string;
+}): Promise<{
+  definition: string;
+  partOfSpeech?: string;
+  gender?: string;
+  article?: string;
+  infinitive?: string;
+  inputTokens: number;
+  outputTokens: number;
+}> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/llm/lookup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: userId,
+      word: params.word,
+      target_language: params.targetLanguage,
+      native_language: params.nativeLanguage,
+      article_context: params.articleContext ?? null,
+    }),
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Lookup failed');
+  return {
+    definition: data.definition as string,
+    partOfSpeech: (data.partOfSpeech as string) || undefined,
+    gender: (data.gender as string) || undefined,
+    article: (data.article as string) || undefined,
+    infinitive: (data.infinitive as string) || undefined,
+    inputTokens: (data.inputTokens as number) ?? 0,
+    outputTokens: (data.outputTokens as number) ?? 0,
+  };
+}
+
+export async function apiSelectVocabWords(params: {
+  text: string;
+  targetLanguage: string;
+  nativeLanguage: string;
+  existingWords: string[];
+}): Promise<{ words: string[]; inputTokens: number; outputTokens: number }> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/llm/vocab-select`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: userId,
+      text: params.text,
+      target_language: params.targetLanguage,
+      native_language: params.nativeLanguage,
+      existing_words: params.existingWords,
+    }),
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Vocab selection failed');
+  return {
+    words: data.words as string[],
+    inputTokens: (data.inputTokens as number) ?? 0,
+    outputTokens: (data.outputTokens as number) ?? 0,
+  };
+}
+
+export async function apiGetVerbConjugation(params: {
+  verb: string;
+  language: string;
+}): Promise<{ conjugation: import('../types').VerbConjugation | null; inputTokens: number; outputTokens: number }> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/llm/conjugate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: userId,
+      verb: params.verb,
+      language: params.language,
+    }),
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Conjugation failed');
+  return {
+    conjugation: (data.conjugation as import('../types').VerbConjugation) ?? null,
+    inputTokens: (data.inputTokens as number) ?? 0,
+    outputTokens: (data.outputTokens as number) ?? 0,
+  };
+}
+
 export async function apiClearArticles(): Promise<void> {
   const userId = await getUserId();
   await fetch(`${BACKEND_URL}/articles?user_id=${encodeURIComponent(userId)}`, {
