@@ -177,8 +177,12 @@ export default function ArticleScreen() {
     let saveWord = popupWord;
 
     if (isVerb) {
-      conjugation = (await getVerbConjugation(popupWord, article.targetLanguage)) ?? undefined;
-      if (conjugation?.infinitive) saveWord = conjugation.infinitive;
+      try {
+        conjugation = (await getVerbConjugation(popupWord, article.targetLanguage)) ?? undefined;
+        if (conjugation?.infinitive) saveWord = conjugation.infinitive;
+      } catch {
+        // Save the word without conjugation if the conjugation fetch fails
+      }
     }
 
     await addWord({
