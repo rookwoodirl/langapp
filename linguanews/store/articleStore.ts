@@ -49,12 +49,14 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
     try {
       let rawText: string;
       let sourceUrl: string | undefined;
+      let title: string | undefined;
 
       if (isUrl) {
         set({ loadingStep: 'Fetching article…' });
         const scraped = await scrapeArticle(input);
         rawText = scraped.textContent;
         sourceUrl = input;
+        title = scraped.title || undefined;
       } else {
         rawText = input;
       }
@@ -63,6 +65,7 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
       const { id } = await apiStartTranslation({
         text: rawText,
         sourceUrl,
+        title,
         sourceLanguage: settings.sourceLanguage,
         targetLanguage: settings.targetLanguage,
         nativeLanguage: settings.nativeLanguage ?? 'en',
@@ -72,6 +75,7 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
       // Create stub so it shows in Articles list immediately
       const stub: Article = {
         id,
+        title,
         sourceUrl: sourceUrl ?? '',
         sourceLanguage: settings.sourceLanguage,
         targetLanguage: settings.targetLanguage,

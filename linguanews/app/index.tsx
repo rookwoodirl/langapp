@@ -502,6 +502,9 @@ export default function HomeScreen() {
             {item.sourceUrl ? (
               <Text style={styles.articleUrl} numberOfLines={1}>{item.sourceUrl}</Text>
             ) : null}
+            {item.title ? (
+              <Text style={styles.articleTitle} numberOfLines={2}>{item.title}</Text>
+            ) : null}
             {item.status === 'translating' ? (
               <Text style={styles.articleTranslating}>Translating…</Text>
             ) : item.status === 'error' ? (
@@ -718,6 +721,32 @@ export default function HomeScreen() {
   );
 
   // ── Cost page ───────────────────────────────────────────────────────────────
+  // Aggregate article events by articleId so each article = 1 row.
+  // Events without an articleId (old data) are kept as-is.
+  const aggregatedCostEvents = useMemo(() => {
+    const articleGroups = new Map<string, CostEvent>();
+    const result: (CostEvent & { isAggregated?: boolean })[] = [];
+    for (const e of costEvents) {
+      if (e.source === 'article' && e.articleId) {
+        const existing = articleGroups.get(e.articleId);
+        if (existing) {
+          existing.inputCredits += e.inputCredits;
+          existing.outputCredits += e.outputCredits;
+          existing.cost += e.cost;
+          // Keep most recent date
+          if (e.createdAt > existing.createdAt) existing.createdAt = e.createdAt;
+        } else {
+          const agg = { ...e, isAggregated: true };
+          articleGroups.set(e.articleId, agg);
+          result.push(agg);
+        }
+      } else {
+        result.push(e);
+      }
+    }
+    return result;
+  }, [costEvents]);
+
   const costTotalCost = costEvents.reduce((sum, e) => sum + e.cost, 0);
   const costTotalInputCredits = costEvents.reduce((sum, e) => sum + e.inputCredits, 0);
   const costTotalOutputCredits = costEvents.reduce((sum, e) => sum + e.outputCredits, 0);
@@ -727,8 +756,8 @@ export default function HomeScreen() {
     <FlatList
       style={{ width }}
       nestedScrollEnabled
-      contentContainerStyle={costEvents.length === 0 ? styles.emptyContainer : styles.listContent}
-      data={costEvents}
+      contentContainerStyle={aggregatedCostEvents.length === 0 ? styles.emptyContainer : styles.listContent}
+      data={aggregatedCostEvents}
       keyExtractor={(e) => e.id}
       ListHeaderComponent={
         <View>
@@ -799,6 +828,9 @@ export default function HomeScreen() {
             <Text style={styles.costEventSource}>{SOURCE_LABELS[item.source] ?? item.source}</Text>
             <Text style={styles.costEventCost}>{formatCost(item.cost)}</Text>
           </View>
+          {item.description ? (
+            <Text style={styles.costEventDescription} numberOfLines={1}>{item.description}</Text>
+          ) : null}
           <Text style={styles.costEventMeta}>
             {item.model} · {formatTokens(item.inputCredits)} in / {formatTokens(item.outputCredits)} out
             {item.language ? ` · ${getLanguageName(item.language)}` : ''}
@@ -1306,6 +1338,7 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   articleLang: { fontSize: 12, fontWeight: '700', color: colors.accent },
   articleDate: { fontSize: 12, color: colors.textFaint },
   articleUrl: { fontSize: 12, color: colors.textFaint, marginBottom: 6 },
+  articleTitle: { fontSize: 15, fontWeight: '600', color: colors.text, marginBottom: 4, lineHeight: 20 },
   articlePreview: { fontSize: 14, color: colors.textMuted, lineHeight: 20 },
   articleTranslating: { fontSize: 14, color: colors.accent, fontStyle: 'italic' },
   articleCost: { fontSize: 11, color: colors.textFaint, marginTop: 6 },
@@ -1325,7 +1358,8 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   costEventRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   costEventSource: { fontSize: 14, fontWeight: '700', color: colors.text },
   costEventCost: { fontSize: 14, fontWeight: '700', color: colors.accent },
-  costEventMeta: { fontSize: 12, color: colors.textMuted, marginTop: 4 },
+  costEventDescription: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
+  costEventMeta: { fontSize: 12, color: colors.textFaint, marginTop: 3 },
   costEventDate: { fontSize: 11, color: colors.textFaint, marginTop: 2 },
 
   // Review page

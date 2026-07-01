@@ -148,6 +148,9 @@ async function migrate() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS article_text_article_id_idx ON article_text (article_id, row_order)`);
 
+  await pool.query(`ALTER TABLE api_costs ADD COLUMN IF NOT EXISTS description TEXT`);
+  await pool.query(`ALTER TABLE api_costs ADD COLUMN IF NOT EXISTS article_id TEXT`);
+
   console.log('Migrations complete');
 }
 

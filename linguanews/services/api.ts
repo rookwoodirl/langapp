@@ -32,6 +32,7 @@ function rowToArticle(row: Record<string, unknown>): Article {
     rawStatus === 'translating' || rawStatus === 'error' ? rawStatus : 'complete';
   return {
     id: row.id as string,
+    title: (row.title as string) || undefined,
     sourceUrl: (row.url as string) ?? '',
     sourceLanguage: row.source_language as string,
     targetLanguage: row.target_language as string,
@@ -49,6 +50,7 @@ function rowToArticle(row: Record<string, unknown>): Article {
 export async function apiStartTranslation(params: {
   text: string;
   sourceUrl?: string;
+  title?: string;
   sourceLanguage: string;
   targetLanguage: string;
   nativeLanguage: string;
@@ -62,6 +64,7 @@ export async function apiStartTranslation(params: {
       user_id: userId,
       text: params.text,
       url: params.sourceUrl ?? null,
+      title: params.title ?? null,
       source_language: params.sourceLanguage,
       target_language: params.targetLanguage,
       native_language: params.nativeLanguage,
@@ -166,6 +169,8 @@ export interface CostEvent {
   source: string;
   model: string;
   language?: string;
+  description?: string;
+  articleId?: string;
   inputCredits: number;
   outputCredits: number;
   cost: number;
@@ -187,6 +192,8 @@ export async function apiGetCostEvents(filters?: { since?: Date; source?: string
       source: row.source as string,
       model: row.model as string,
       language: (row.language as string) ?? undefined,
+      description: (row.description as string) ?? undefined,
+      articleId: (row.articleId as string) ?? undefined,
       inputCredits: row.inputCredits as number,
       outputCredits: row.outputCredits as number,
       cost: row.cost as number,

@@ -33,16 +33,22 @@ export default function ArticleScreen() {
   const styles = useMemo(() => themedStyles(colors), [colors]);
 
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { currentArticle, savedArticles, lookupWord, saveArticle, loadArticleById, continueTranslation, appendSentences, isLoading, loadingStep, vocabInputTokens, vocabOutputTokens, ttsPlaying, toggleTTS } = useArticleStore();
+  const { currentArticle, savedArticles, lookupWord, loadArticleById, continueTranslation, appendSentences, isLoading, loadingStep, vocabInputTokens, vocabOutputTokens, ttsPlaying, toggleTTS } = useArticleStore();
   const { addWord, words: vocabWords } = useVocabStore();
 
   const article = currentArticle?.id === id
     ? currentArticle
     : savedArticles.find((a) => a.id === id) ?? null;
 
-  // Deep-link / reload fallback: fetch from backend if article isn't in local state
+  // Fetch full content from backend if:
+  // - article not in local state at all (deep-link / cold start), OR
+  // - article is a list stub with no sentences (new streaming articles have content in article_text, not the JSONB list columns)
   useEffect(() => {
-    if (!article && id) {
+    if (!id) return;
+    const isMissingContent =
+      !article ||
+      (article.sentencePairs.length === 0 && article.status !== 'translating');
+    if (isMissingContent) {
       loadArticleById(id).catch(() => {});
     }
   }, [id]);
@@ -86,9 +92,6 @@ export default function ArticleScreen() {
     () => pairs.map((p) => p.translation).join(' '),
     [pairs]
   );
-
-  const [saving, setSaving] = useState(false);
-  const isSaved = savedArticles.some((a) => a.id === id);
 
   useEffect(() => {
     if (ttsPlaying) {
@@ -201,26 +204,12 @@ export default function ArticleScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.langBar}>
-        <Text style={styles.langText}>{fromName} → {toName}</Text>
-        <TouchableOpacity
-          style={[styles.saveButton, isSaved && styles.saveButtonDone]}
-          disabled={isSaved || saving}
-          onPress={async () => {
-            setSaving(true);
-            try {
-              const newId = await saveArticle();
-              if (newId && newId !== id) router.replace(`/article/${newId}`);
-            } catch (err) {
-              Alert.alert('Save failed', err instanceof Error ? err.message : String(err));
-            } finally {
-              setSaving(false);
-            }
-          }}
-        >
-          <Text style={[styles.saveText, isSaved && styles.saveTextDone]}>
-            {isSaved ? '✓ Saved' : saving ? 'Saving…' : 'Save'}
-          </Text>
-        </TouchableOpacity>
+        <View style={{ flex: 1 }}>
+          {article.title ? (
+            <Text style={styles.articleTitle} numberOfLines={2}>{article.title}</Text>
+          ) : null}
+          <Text style={styles.langText}>{fromName} → {toName}</Text>
+        </View>
       </View>
 
       {totalTokens > 0 && (
@@ -314,16 +303,8 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
     borderBottomColor: colors.border,
     backgroundColor: colors.surface,
   },
+  articleTitle: { fontSize: 15, fontWeight: '700', color: colors.text, marginBottom: 2 },
   langText: { fontSize: 14, color: colors.textMuted },
-  saveButton: {
-    backgroundColor: colors.accent,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  saveButtonDone: { backgroundColor: colors.successSoft },
-  saveText: { fontSize: 14, fontWeight: '700', color: colors.accentText },
-  saveTextDone: { color: colors.success },
   costBar: {
     flexDirection: 'row',
     justifyContent: 'flex-end',

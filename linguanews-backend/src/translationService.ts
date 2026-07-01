@@ -27,6 +27,7 @@ export async function runTranslationJob(
   targetLanguage: string,
   nativeLanguage: string,
   difficulty: string,
+  title?: string,
 ): Promise<void> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -122,11 +123,12 @@ export async function runTranslationJob(
       }
     }
 
-    // Record cost in api_costs
+    // Record cost in api_costs (one row per article translation)
+    const description = title?.trim() || null;
     await pool.query(
-      `INSERT INTO api_costs (user_id, source, model, language, input_credit_rate, total_input_credits, output_credit_rate, total_output_credits)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [userId, 'article', MODEL, targetLanguage, INPUT_RATE, totalInputTokens, OUTPUT_RATE, totalOutputTokens],
+      `INSERT INTO api_costs (user_id, source, model, language, input_credit_rate, total_input_credits, output_credit_rate, total_output_credits, description, article_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [userId, 'article', MODEL, targetLanguage, INPUT_RATE, totalInputTokens, OUTPUT_RATE, totalOutputTokens, description, articleId],
     );
 
     // Mark complete with token totals

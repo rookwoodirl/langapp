@@ -6,7 +6,7 @@ const router = Router();
 
 // Start a background streaming translation job
 router.post('/translate', async (req: Request, res: Response) => {
-  const { user_id, text, url, source_language, target_language, native_language, difficulty } = req.body;
+  const { user_id, text, url, title, source_language, target_language, native_language, difficulty } = req.body;
 
   if (!user_id || !text || !source_language || !target_language) {
     return res.status(400).json({ error: 'user_id, text, source_language, and target_language are required' });
@@ -14,10 +14,10 @@ router.post('/translate', async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO articles (user_id, url, source_language, target_language, status, original_sentences, translated_sentences, vocab)
-       VALUES ($1, $2, $3, $4, 'translating', '[]', '[]', '[]')
+      `INSERT INTO articles (user_id, url, title, source_language, target_language, status, original_sentences, translated_sentences, vocab)
+       VALUES ($1, $2, $3, $4, $5, 'translating', '[]', '[]', '[]')
        RETURNING id`,
-      [user_id, url ?? null, source_language, target_language],
+      [user_id, url ?? null, title ?? null, source_language, target_language],
     );
     const articleId = result.rows[0].id as string;
 
@@ -30,6 +30,7 @@ router.post('/translate', async (req: Request, res: Response) => {
       target_language as string,
       (native_language as string) ?? 'en',
       (difficulty as string) ?? 'intermediate',
+      (title as string) ?? undefined,
     ).catch((err) => console.error('Unhandled translation job error:', err));
 
     return res.status(201).json({ id: articleId });
@@ -120,10 +121,28 @@ router.get('/', async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, url, title, source_language, target_language, original_sentences, translated_sentences, vocab, input_tokens, output_tokens, remaining_text, created_at, status, status_message
-       FROM articles
-       WHERE user_id = $1 AND deleted = false
-       ORDER BY created_at DESC
+      `SELECT
+         a.id, a.url, a.title, a.source_language, a.target_language,
+         a.vocab, a.input_tokens, a.output_tokens, a.remaining_text, a.created_at, a.status, a.status_message,
+         CASE WHEN jsonb_array_length(a.original_sentences) > 0
+           THEN a.original_sentences
+           ELSE COALESCE(
+             (SELECT jsonb_agg(t.original ORDER BY t.row_order)
+              FROM (SELECT original, row_order FROM article_text WHERE article_id = a.id ORDER BY row_order LIMIT 5) t),
+             '[]'::jsonb
+           )
+         END AS original_sentences,
+         CASE WHEN jsonb_array_length(a.translated_sentences) > 0
+           THEN a.translated_sentences
+           ELSE COALESCE(
+             (SELECT jsonb_agg(t.translated ORDER BY t.row_order)
+              FROM (SELECT translated, row_order FROM article_text WHERE article_id = a.id ORDER BY row_order LIMIT 5) t),
+             '[]'::jsonb
+           )
+         END AS translated_sentences
+       FROM articles a
+       WHERE a.user_id = $1 AND a.deleted = false
+       ORDER BY a.created_at DESC
        LIMIT 100`,
       [user_id],
     );

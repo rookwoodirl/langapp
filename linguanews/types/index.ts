@@ -16,6 +16,7 @@ export interface VocabWord {
 
 export interface Article {
   id: string;
+  title?: string;
   sourceUrl: string;
   sourceLanguage: LanguageCode;
   targetLanguage: LanguageCode;

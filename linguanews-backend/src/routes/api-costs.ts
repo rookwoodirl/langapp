@@ -53,7 +53,7 @@ router.get('/events', async (req: Request, res: Response) => {
   try {
     const result = await pool.query(
       `SELECT
-         id, created_at, source, model, language,
+         id, created_at, source, model, language, description, article_id,
          total_input_credits, total_output_credits,
          (total_input_credits  * input_credit_rate  / 1000000.0 +
           total_output_credits * output_credit_rate / 1000000.0) AS cost
@@ -70,6 +70,8 @@ router.get('/events', async (req: Request, res: Response) => {
       source: row.source,
       model: row.model,
       language: row.language,
+      description: row.description ?? null,
+      articleId: row.article_id ?? null,
       inputCredits: Number(row.total_input_credits),
       outputCredits: Number(row.total_output_credits),
       cost: Number(row.cost),
