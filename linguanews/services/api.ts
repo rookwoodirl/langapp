@@ -27,6 +27,9 @@ function rowToArticle(row: Record<string, unknown>): Article {
     original: originals[i] ?? '',
     translation,
   }));
+  const rawStatus = row.status as string | undefined;
+  const status: Article['status'] =
+    rawStatus === 'translating' || rawStatus === 'error' ? rawStatus : 'complete';
   return {
     id: row.id as string,
     sourceUrl: (row.url as string) ?? '',
@@ -38,7 +41,48 @@ function rowToArticle(row: Record<string, unknown>): Article {
     inputTokens: (row.input_tokens as number) ?? 0,
     outputTokens: (row.output_tokens as number) ?? 0,
     remainingText: (row.remaining_text as string) || undefined,
+    status,
+    statusMessage: (row.status_message as string) || undefined,
   };
+}
+
+export async function apiStartTranslation(params: {
+  text: string;
+  sourceUrl?: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  nativeLanguage: string;
+  difficulty: string;
+}): Promise<{ id: string }> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/articles/translate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: userId,
+      text: params.text,
+      url: params.sourceUrl ?? null,
+      source_language: params.sourceLanguage,
+      target_language: params.targetLanguage,
+      native_language: params.nativeLanguage,
+      difficulty: params.difficulty,
+    }),
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Failed to start translation');
+  return { id: data.id as string };
+}
+
+export async function apiPollArticleSentences(
+  articleId: string,
+  after: number,
+): Promise<{ sentences: { original: string; translation: string }[]; status: string; total: number }> {
+  const userId = await getUserId();
+  const params = new URLSearchParams({ user_id: userId, after: String(after) });
+  const res = await fetch(`${BACKEND_URL}/articles/${encodeURIComponent(articleId)}/sentences?${params.toString()}`);
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Failed to poll sentences');
+  return data as { sentences: { original: string; translation: string }[]; status: string; total: number };
 }
 
 export async function apiSaveArticle(article: Article): Promise<string> {

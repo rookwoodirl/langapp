@@ -213,11 +213,8 @@ export default function HomeScreen() {
     loadUsage();
   }, []);
 
-  useEffect(() => {
-    if (currentArticle && !isLoading) {
-      router.push(`/article/${currentArticle.id}`);
-    }
-  }, [currentArticle, isLoading]);
+  // No auto-navigate: translation now starts a background job on the server.
+  // Navigation is handled explicitly in handleTranslate.
 
   useEffect(() => {
     if (error) Alert.alert('Error', error);
@@ -256,7 +253,6 @@ export default function HomeScreen() {
       Alert.alert('Paste a URL first', 'Tap the Paste button to load a link from your clipboard.');
       return;
     }
-    // Capture and reset source before showing the alert so a Cancel can never leave a stale value
     const src = pendingSourceRef.current;
     pendingSourceRef.current = 'article';
     Alert.alert(
@@ -264,7 +260,21 @@ export default function HomeScreen() {
       'This will send the article to Claude for translation. Estimated cost: max $1.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Translate', onPress: () => { fetchArticle(url.trim(), true, settings, src); } },
+        {
+          text: 'Translate',
+          onPress: async () => {
+            await fetchArticle(url.trim(), true, settings, src);
+            // fetchArticle now returns quickly — the translation runs on the server
+            if (!useArticleStore.getState().error) {
+              Alert.alert(
+                'Translation started',
+                'Your article is being translated sentence by sentence. It will appear in the Articles section as it comes in.',
+                [{ text: 'Go to Articles', onPress: () => { scrollToTab(1); loadSavedArticles(); } },
+                 { text: 'OK', style: 'cancel' }],
+              );
+            }
+          },
+        },
       ]
     );
   }
@@ -492,9 +502,17 @@ export default function HomeScreen() {
             {item.sourceUrl ? (
               <Text style={styles.articleUrl} numberOfLines={1}>{item.sourceUrl}</Text>
             ) : null}
-            <Text style={styles.articlePreview} numberOfLines={3}>
-              {item.sentencePairs.map((p) => p.translation).join(' ')}
-            </Text>
+            {item.status === 'translating' ? (
+              <Text style={styles.articleTranslating}>Translating…</Text>
+            ) : item.status === 'error' ? (
+              <Text style={[styles.articlePreview, { color: colors.danger }]} numberOfLines={1}>
+                Translation failed
+              </Text>
+            ) : (
+              <Text style={styles.articlePreview} numberOfLines={3}>
+                {item.sentencePairs.map((p) => p.translation).join(' ')}
+              </Text>
+            )}
             {articleTokens > 0 && (
               <Text style={styles.articleCost}>
                 {formatTokens(articleTokens)} tokens · {formatCost(articleCost)}
@@ -1289,6 +1307,7 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   articleDate: { fontSize: 12, color: colors.textFaint },
   articleUrl: { fontSize: 12, color: colors.textFaint, marginBottom: 6 },
   articlePreview: { fontSize: 14, color: colors.textMuted, lineHeight: 20 },
+  articleTranslating: { fontSize: 14, color: colors.accent, fontStyle: 'italic' },
   articleCost: { fontSize: 11, color: colors.textFaint, marginTop: 6 },
 
   // Cost page

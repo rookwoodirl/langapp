@@ -1,7 +1,77 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../db';
+import { runTranslationJob } from '../translationService';
 
 const router = Router();
+
+// Start a background streaming translation job
+router.post('/translate', async (req: Request, res: Response) => {
+  const { user_id, text, url, source_language, target_language, native_language, difficulty } = req.body;
+
+  if (!user_id || !text || !source_language || !target_language) {
+    return res.status(400).json({ error: 'user_id, text, source_language, and target_language are required' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO articles (user_id, url, source_language, target_language, status, original_sentences, translated_sentences, vocab)
+       VALUES ($1, $2, $3, $4, 'translating', '[]', '[]', '[]')
+       RETURNING id`,
+      [user_id, url ?? null, source_language, target_language],
+    );
+    const articleId = result.rows[0].id as string;
+
+    // Fire-and-forget — response is already sent
+    void runTranslationJob(
+      articleId,
+      user_id as string,
+      text as string,
+      source_language as string,
+      target_language as string,
+      (native_language as string) ?? 'en',
+      (difficulty as string) ?? 'intermediate',
+    ).catch((err) => console.error('Unhandled translation job error:', err));
+
+    return res.status(201).json({ id: articleId });
+  } catch (err) {
+    console.error('POST /articles/translate error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Poll for newly translated sentences (after row_order >= `after`)
+router.get('/:id/sentences', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { user_id, after } = req.query;
+  const afterOrder = Math.max(0, parseInt(String(after ?? '0'), 10));
+
+  try {
+    const articleResult = await pool.query(
+      `SELECT status FROM articles WHERE id = $1 AND user_id = $2 AND deleted = false`,
+      [id, user_id],
+    );
+    if (articleResult.rows.length === 0) return res.status(404).json({ error: 'Article not found' });
+
+    const sentencesResult = await pool.query(
+      `SELECT original, translated FROM article_text WHERE article_id = $1 AND row_order >= $2 ORDER BY row_order`,
+      [id, afterOrder],
+    );
+
+    const totalResult = await pool.query(
+      `SELECT COUNT(*) as total FROM article_text WHERE article_id = $1`,
+      [id],
+    );
+
+    return res.json({
+      sentences: sentencesResult.rows.map((r) => ({ original: r.original as string, translation: r.translated as string })),
+      status: articleResult.rows[0].status as string,
+      total: parseInt(totalResult.rows[0].total as string, 10),
+    });
+  } catch (err) {
+    console.error('GET /articles/:id/sentences error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
 
 // Save a translated article
 router.post('/', async (req: Request, res: Response) => {
@@ -50,12 +120,12 @@ router.get('/', async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, url, title, source_language, target_language, original_sentences, translated_sentences, vocab, input_tokens, output_tokens, remaining_text, created_at
+      `SELECT id, url, title, source_language, target_language, original_sentences, translated_sentences, vocab, input_tokens, output_tokens, remaining_text, created_at, status, status_message
        FROM articles
        WHERE user_id = $1 AND deleted = false
        ORDER BY created_at DESC
        LIMIT 100`,
-      [user_id]
+      [user_id],
     );
     return res.json(result.rows);
   } catch (err) {
@@ -64,20 +134,33 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
-// Get a single article
+// Get a single article (sentences come from article_text if present, else legacy JSONB columns)
 router.get('/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
   const { user_id } = req.query;
 
   try {
-    const result = await pool.query(
-      `SELECT * FROM articles WHERE id = $1 AND user_id = $2 AND deleted = false`,
-      [id, user_id]
+    const articleResult = await pool.query(
+      `SELECT id, url, title, source_language, target_language, vocab, input_tokens, output_tokens,
+              remaining_text, created_at, status, status_message, original_sentences, translated_sentences
+       FROM articles WHERE id = $1 AND user_id = $2 AND deleted = false`,
+      [id, user_id],
     );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Article not found' });
+    if (articleResult.rows.length === 0) return res.status(404).json({ error: 'Article not found' });
+
+    const article = articleResult.rows[0];
+
+    // Prefer article_text rows (streaming-translated articles) over legacy JSONB columns
+    const textResult = await pool.query(
+      `SELECT original, translated FROM article_text WHERE article_id = $1 ORDER BY row_order`,
+      [id],
+    );
+    if (textResult.rows.length > 0) {
+      article.original_sentences = textResult.rows.map((r) => r.original as string);
+      article.translated_sentences = textResult.rows.map((r) => r.translated as string);
     }
-    return res.json(result.rows[0]);
+
+    return res.json(article);
   } catch (err) {
     console.error('GET /articles/:id error:', err);
     return res.status(500).json({ error: 'Database error' });

@@ -25,6 +25,8 @@ export interface Article {
   inputTokens: number;
   outputTokens: number;
   remainingText?: string;
+  status?: 'translating' | 'complete' | 'error';
+  statusMessage?: string;
 }
 
 export type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced';

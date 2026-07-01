@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -22,6 +22,7 @@ import { calcCost, formatCost, formatTokens } from '../../utils/cost';
 import { SentencePair, VerbConjugation } from '../../types';
 import { useColors } from '../../hooks/useColors';
 import { ThemeColors } from '../../constants/theme';
+import { apiPollArticleSentences } from '../../services/api';
 
 const SETTINGS_KEY = '@linguanews/settings';
 
@@ -32,10 +33,12 @@ export default function ArticleScreen() {
   const styles = useMemo(() => themedStyles(colors), [colors]);
 
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { currentArticle, savedArticles, lookupWord, saveArticle, loadArticleById, continueTranslation, isLoading, loadingStep, vocabInputTokens, vocabOutputTokens, ttsPlaying, toggleTTS } = useArticleStore();
+  const { currentArticle, savedArticles, lookupWord, saveArticle, loadArticleById, continueTranslation, appendSentences, isLoading, loadingStep, vocabInputTokens, vocabOutputTokens, ttsPlaying, toggleTTS } = useArticleStore();
   const { addWord, words: vocabWords } = useVocabStore();
 
-  const article = currentArticle?.id === id ? currentArticle : null;
+  const article = currentArticle?.id === id
+    ? currentArticle
+    : savedArticles.find((a) => a.id === id) ?? null;
 
   // Deep-link / reload fallback: fetch from backend if article isn't in local state
   useEffect(() => {
@@ -43,6 +46,39 @@ export default function ArticleScreen() {
       loadArticleById(id).catch(() => {});
     }
   }, [id]);
+
+  // Poll for new sentences while the article is still being translated server-side
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!id || article?.status !== 'translating') {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      return;
+    }
+
+    async function poll() {
+      const state = useArticleStore.getState();
+      const currentPairs = state.currentArticle?.id === id
+        ? state.currentArticle!.sentencePairs
+        : state.savedArticles.find((a) => a.id === id)?.sentencePairs ?? [];
+
+      try {
+        const result = await apiPollArticleSentences(id!, currentPairs.length);
+        if (result.sentences.length > 0 || result.status !== 'translating') {
+          appendSentences(id!, result.sentences, result.status);
+        }
+        if (result.status !== 'translating') {
+          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+          // Reload article to get final token counts
+          loadArticleById(id!).catch(() => {});
+        }
+      } catch {
+        // Silently retry on network errors
+      }
+    }
+
+    pollRef.current = setInterval(poll, 2000);
+    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  }, [id, article?.status]);
 
   const pairs = useMemo<SentencePair[]>(() => article?.sentencePairs ?? [], [article?.sentencePairs]);
 
@@ -80,8 +116,21 @@ export default function ArticleScreen() {
   if (!article) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.errorText}>Article not found.</Text>
+        <ActivityIndicator size="large" />
+        <Text style={styles.errorText}>Loading article…</Text>
         <TouchableOpacity onPress={() => router.back()}>
+          <Text style={styles.link}>Go back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (article.status === 'error') {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.errorText}>Translation failed.</Text>
+        <Text style={[styles.errorText, { fontSize: 13, marginTop: 4 }]}>{article.statusMessage ?? ''}</Text>
+        <TouchableOpacity onPress={() => router.back()} style={{ marginTop: 16 }}>
           <Text style={styles.link}>Go back</Text>
         </TouchableOpacity>
       </View>
@@ -209,7 +258,12 @@ export default function ArticleScreen() {
         contentContainerStyle={styles.listContent}
         style={styles.list}
         ListFooterComponent={
-          article.remainingText ? (
+          article.status === 'translating' ? (
+            <View style={styles.translatingBanner}>
+              <ActivityIndicator size="small" color={colors.accent} style={{ marginRight: 10 }} />
+              <Text style={styles.translatingText}>Translating…</Text>
+            </View>
+          ) : article.remainingText ? (
             <TouchableOpacity
               style={styles.continueBtn}
               onPress={async () => {
@@ -309,6 +363,20 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
     alignItems: 'center',
   },
   continueBtnText: { fontSize: 15, fontWeight: '700', color: colors.accentText },
+  translatingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 40,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: colors.accentSoft,
+    borderWidth: 1,
+    borderColor: colors.accent,
+  },
+  translatingText: { fontSize: 14, fontWeight: '600', color: colors.accent },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
   errorText: { fontSize: 16, color: colors.textMuted },
   link: { fontSize: 15, color: colors.accent },

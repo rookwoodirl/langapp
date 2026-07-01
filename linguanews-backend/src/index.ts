@@ -15,7 +15,7 @@ const app = express();
 const PORT = process.env.PORT ?? 3000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '4mb' }));
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true });
@@ -131,6 +131,22 @@ async function migrate() {
   await pool.query(`CREATE INDEX IF NOT EXISTS notecard_list_items_user_vocab_id_idx ON notecard_list_items (user_vocab_id)`);
 
   await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS remaining_text TEXT`);
+  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'complete'`);
+  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS status_message TEXT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS article_text (
+      id              SERIAL PRIMARY KEY,
+      article_id      UUID NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+      row_order       INT NOT NULL,
+      original        TEXT NOT NULL,
+      translated      TEXT NOT NULL,
+      source_language TEXT NOT NULL,
+      target_language TEXT NOT NULL,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS article_text_article_id_idx ON article_text (article_id, row_order)`);
 
   console.log('Migrations complete');
 }

@@ -1,9 +1,9 @@
 import { create } from 'zustand';
-import { Article, UserSettings } from '../types';
+import { Article, SentencePair, UserSettings } from '../types';
 import { scrapeArticle } from '../services/scraper';
 import { translateArticle } from '../services/translator';
 import { lookupWordDefinition, LookupResult } from '../services/vocab';
-import { apiSaveArticle, apiLoadArticles, apiLoadArticle, apiDeleteArticle, apiClearArticles, apiPatchArticle } from '../services/api';
+import { apiSaveArticle, apiLoadArticles, apiLoadArticle, apiDeleteArticle, apiClearArticles, apiPatchArticle, apiStartTranslation } from '../services/api';
 import { useUsageStore } from './usageStore';
 import { CostSource } from '../services/apiCosts';
 
@@ -19,6 +19,7 @@ interface ArticleStore {
   vocabOutputTokens: number;
 
   loadArticle: (input: string, isUrl: boolean, settings: UserSettings, source?: CostSource) => Promise<void>;
+  appendSentences: (articleId: string, sentences: SentencePair[], status: string) => void;
   continueTranslation: (settings: UserSettings) => Promise<void>;
   lookupWord: (word: string, settings: UserSettings) => Promise<{ definition: string; partOfSpeech?: string; gender?: string; article?: string; infinitive?: string }>;
   toggleTTS: () => void;
@@ -42,12 +43,12 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
   vocabInputTokens: 0,
   vocabOutputTokens: 0,
 
-  loadArticle: async (input, isUrl, settings, source = 'article') => {
+  loadArticle: async (input, isUrl, settings, _source = 'article') => {
     set({ isLoading: true, error: null, wordLookupCache: {}, vocabInputTokens: 0, vocabOutputTokens: 0 });
 
     try {
       let rawText: string;
-      let sourceUrl = '';
+      let sourceUrl: string | undefined;
 
       if (isUrl) {
         set({ loadingStep: 'Fetching article…' });
@@ -58,33 +59,36 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
         rawText = input;
       }
 
-      set({ loadingStep: 'Translating…' });
-      const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
-      const result = await translateArticle(
-        rawText,
-        settings.sourceLanguage,
-        settings.targetLanguage,
-        apiKey,
-        settings.difficulty ?? 'intermediate',
-        source,
-        settings.nativeLanguage ?? 'en',
-      );
-
-      const article: Article = {
-        id: Date.now().toString(),
+      set({ loadingStep: 'Sending to server…' });
+      const { id } = await apiStartTranslation({
+        text: rawText,
         sourceUrl,
         sourceLanguage: settings.sourceLanguage,
         targetLanguage: settings.targetLanguage,
-        sentencePairs: result.sentencePairs,
-        vocabList: result.vocab,
+        nativeLanguage: settings.nativeLanguage ?? 'en',
+        difficulty: settings.difficulty ?? 'intermediate',
+      });
+
+      // Create stub so it shows in Articles list immediately
+      const stub: Article = {
+        id,
+        sourceUrl: sourceUrl ?? '',
+        sourceLanguage: settings.sourceLanguage,
+        targetLanguage: settings.targetLanguage,
+        sentencePairs: [],
+        vocabList: [],
         createdAt: Date.now(),
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens,
-        remainingText: result.remainingText,
+        inputTokens: 0,
+        outputTokens: 0,
+        status: 'translating',
       };
 
-      set({ currentArticle: article, isLoading: false, loadingStep: 'Done' });
-      useUsageStore.getState().addArticle(result.inputTokens, result.outputTokens);
+      set((state) => ({
+        isLoading: false,
+        loadingStep: '',
+        currentArticle: stub,
+        savedArticles: [stub, ...state.savedArticles.filter((a) => a.id !== id)],
+      }));
     } catch (err) {
       set({
         isLoading: false,
@@ -92,6 +96,25 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
         error: err instanceof Error ? err.message : 'An unexpected error occurred.',
       });
     }
+  },
+
+  appendSentences: (articleId, sentences, status) => {
+    const articleStatus: Article['status'] =
+      status === 'translating' || status === 'error' ? status : 'complete';
+    set((state) => {
+      const update = (a: Article): Article => {
+        if (a.id !== articleId) return a;
+        return {
+          ...a,
+          sentencePairs: [...a.sentencePairs, ...sentences],
+          status: articleStatus,
+        };
+      };
+      return {
+        currentArticle: state.currentArticle?.id === articleId ? update(state.currentArticle) : state.currentArticle,
+        savedArticles: state.savedArticles.map(update),
+      };
+    });
   },
 
   continueTranslation: async (settings) => {

@@ -8,6 +8,7 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.109.0",
     "@mozilla/readability": "^0.6.0",
     "@types/jsonwebtoken": "^9.0.10",
     "cors": "^2.8.5",
