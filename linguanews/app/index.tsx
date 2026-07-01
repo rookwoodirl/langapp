@@ -69,7 +69,7 @@ export default function HomeScreen() {
   const pendingSourceRef = useRef<'article' | 'article-regeneration'>('article');
   const { savedArticles, loadSavedArticles, setCurrentArticle, deleteArticle } = useArticleStore();
   const { words: vocabWords, loadVocab, removeWord, addWord, updateWord } = useVocabStore();
-  const { lists, loadLists, createList, updateList, deleteList, addToList } = useNotecardStore();
+  const { lists, loadLists, createList, updateList, deleteList, addToList, loadListItems, currentListItems } = useNotecardStore();
 
   const { load: loadUsage } = useUsageStore();
 
@@ -88,6 +88,8 @@ export default function HomeScreen() {
   const [listForm, setListForm] = useState({ name: '', language: '' });
   const [pendingAddWord, setPendingAddWord] = useState<UserVocabWord | null>(null);
   const [savingList, setSavingList] = useState(false);
+  const [viewingList, setViewingList] = useState<NotecardList | null>(null);
+  const [listBrowseLoading, setListBrowseLoading] = useState(false);
   const [costEvents, setCostEvents] = useState<CostEvent[]>([]);
   const [costRangeIndex, setCostRangeIndex] = useState(3); // "All time"
   const [costSourceFilter, setCostSourceFilter] = useState<string | null>(null);
@@ -338,6 +340,16 @@ export default function HomeScreen() {
     scrollToTab(0);
   }
 
+  async function handleViewList(list: NotecardList) {
+    setViewingList(list);
+    setListBrowseLoading(true);
+    try {
+      await loadListItems(list.id);
+    } finally {
+      setListBrowseLoading(false);
+    }
+  }
+
   async function handleDeleteArticle(article: Article) {
     Alert.alert('Delete article?', 'This cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
@@ -563,38 +575,44 @@ export default function HomeScreen() {
       }
       renderItem={({ item }) => (
         <View style={styles.vocabCard}>
-          <View style={styles.vocabHeader}>
-            <View style={styles.vocabWordRow}>
-              <Text style={styles.vocabWord}>
-                {item.article ? `${item.article} ` : ''}{item.word}
-              </Text>
-              {item.partOfSpeech ? <Text style={styles.vocabPos}>{item.partOfSpeech}</Text> : null}
-              {item.gender ? <Text style={styles.vocabGender}>{item.gender}</Text> : null}
+          <View style={styles.vocabCardBody}>
+            <View style={styles.vocabCardLeft}>
+              <View style={styles.vocabWordRow}>
+                <Text style={styles.vocabWord}>
+                  {item.article ? `${item.article} ` : ''}{item.word}
+                </Text>
+                {item.partOfSpeech ? <Text style={styles.vocabPos}>{item.partOfSpeech}</Text> : null}
+                {item.gender ? <Text style={styles.vocabGender}>{item.gender}</Text> : null}
+              </View>
+              <Text style={styles.vocabDefinition}>{item.definition}</Text>
+              {item.conjugation && (
+                <TouchableOpacity
+                  style={styles.conjBtn}
+                  onPress={() => setConjModal({ infinitive: item.conjugation!.infinitive, conjugation: item.conjugation! })}
+                >
+                  <Text style={styles.conjBtnText}>Conjugations</Text>
+                </TouchableOpacity>
+              )}
             </View>
-            <View style={styles.vocabCardActions}>
-              <TouchableOpacity onPress={() => ttsService.speak(item.word, item.language)} hitSlop={8}>
-                <Text style={styles.vocabSpeak}>🔊</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setPickerWord(item)} hitSlop={8}>
-                <Text style={styles.vocabEdit}>📋</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => openEditModal(item)} hitSlop={8}>
-                <Text style={styles.vocabEdit}>✎</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => removeWord(item.id)} hitSlop={8}>
-                <Text style={styles.vocabRemove}>✕</Text>
-              </TouchableOpacity>
+            <View style={styles.vocabIconGrid}>
+              <View style={styles.vocabActionsRow}>
+                <TouchableOpacity onPress={() => openEditModal(item)} hitSlop={8}>
+                  <Text style={styles.vocabEdit}>✎</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => removeWord(item.id)} hitSlop={8}>
+                  <Text style={styles.vocabRemove}>✕</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.vocabActionsRow}>
+                <TouchableOpacity onPress={() => ttsService.speak(item.word, item.language)} hitSlop={8}>
+                  <Text style={styles.vocabSpeak}>🔊</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setPickerWord(item)} hitSlop={8}>
+                  <Text style={styles.vocabEdit}>📋</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-          <Text style={styles.vocabDefinition}>{item.definition}</Text>
-          {item.conjugation && (
-            <TouchableOpacity
-              style={styles.conjBtn}
-              onPress={() => setConjModal({ infinitive: item.conjugation!.infinitive, conjugation: item.conjugation! })}
-            >
-              <Text style={styles.conjBtnText}>Conjugations</Text>
-            </TouchableOpacity>
-          )}
         </View>
       )}
     />
@@ -649,7 +667,7 @@ export default function HomeScreen() {
         </View>
       }
       renderItem={({ item }) => (
-        <View style={styles.vocabCard}>
+        <TouchableOpacity style={styles.vocabCard} onPress={() => handleViewList(item)} activeOpacity={0.8}>
           <View style={styles.vocabHeader}>
             <View style={styles.vocabWordRow}>
               <Text style={styles.vocabWord}>{item.name}</Text>
@@ -670,13 +688,7 @@ export default function HomeScreen() {
             {item.itemCount ?? 0} word{item.itemCount === 1 ? '' : 's'}
             {item.language ? ` · ${getLanguageName(item.language)}` : ''}
           </Text>
-          <TouchableOpacity
-            style={styles.conjBtn}
-            onPress={() => router.push({ pathname: '/review', params: { listId: item.id } })}
-          >
-            <Text style={styles.conjBtnText}>Review this list</Text>
-          </TouchableOpacity>
-        </View>
+        </TouchableOpacity>
       )}
       ListFooterComponent={
         <TouchableOpacity style={styles.newListBtn} onPress={() => openCreateList()}>
@@ -997,6 +1009,61 @@ export default function HomeScreen() {
         </View>
       </Modal>
 
+      {/* List browse modal */}
+      <Modal
+        visible={!!viewingList}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setViewingList(null)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setViewingList(null)} />
+        <View style={styles.modalSheet}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>{viewingList?.name}</Text>
+          {listBrowseLoading ? (
+            <ActivityIndicator color={colors.accent} style={{ marginVertical: 32 }} />
+          ) : (
+            <FlatList
+              data={currentListItems}
+              keyExtractor={(w) => w.id}
+              renderItem={({ item: w }) => (
+                <View style={styles.modalVocabItem}>
+                  <View style={styles.vocabWordRow}>
+                    <Text style={styles.vocabWord}>{w.article ? `${w.article} ` : ''}{w.word}</Text>
+                    {w.partOfSpeech ? <Text style={styles.vocabPos}>{w.partOfSpeech}</Text> : null}
+                    {w.gender ? <Text style={styles.vocabGender}>{w.gender}</Text> : null}
+                  </View>
+                  <Text style={styles.vocabDefinition}>{w.definition}</Text>
+                  {w.conjugation && (
+                    <TouchableOpacity
+                      style={styles.conjBtn}
+                      onPress={() => setConjModal({ infinitive: w.conjugation!.infinitive, conjugation: w.conjugation! })}
+                    >
+                      <Text style={styles.conjBtnText}>Conjugations</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+              ListEmptyComponent={<Text style={styles.modalEmpty}>No words in this list yet.</Text>}
+              style={styles.modalList}
+            />
+          )}
+          <TouchableOpacity
+            style={styles.modalDoneBtn}
+            onPress={() => {
+              const id = viewingList!.id;
+              setViewingList(null);
+              router.push({ pathname: '/review', params: { listId: id } });
+            }}
+          >
+            <Text style={styles.modalDoneBtnText}>Review this list</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.editCancelBtn, { marginTop: 10 }]} onPress={() => setViewingList(null)}>
+            <Text style={styles.editCancelText}>Done</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
       {/* Create / rename list modal */}
       <Modal
         visible={!!listModal}
@@ -1310,7 +1377,11 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
     elevation: 2,
   },
   vocabHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 },
-  vocabWordRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  vocabCardBody: { flexDirection: 'row', alignItems: 'flex-start' },
+  vocabCardLeft: { flex: 1, marginRight: 10 },
+  vocabIconGrid: { flexDirection: 'column', gap: 8, alignItems: 'flex-end' },
+  vocabActionsRow: { flexDirection: 'row', gap: 10 },
+  vocabWordRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 },
   vocabWord: { fontSize: 18, fontWeight: '700', color: colors.text },
   vocabPos: {
     fontSize: 12,

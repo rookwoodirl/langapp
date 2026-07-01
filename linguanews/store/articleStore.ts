@@ -3,7 +3,7 @@ import { Article, UserSettings } from '../types';
 import { scrapeArticle } from '../services/scraper';
 import { translateArticle } from '../services/translator';
 import { lookupWordDefinition, LookupResult } from '../services/vocab';
-import { apiSaveArticle, apiLoadArticles, apiLoadArticle, apiDeleteArticle, apiClearArticles } from '../services/api';
+import { apiSaveArticle, apiLoadArticles, apiLoadArticle, apiDeleteArticle, apiClearArticles, apiPatchArticle } from '../services/api';
 import { useUsageStore } from './usageStore';
 import { CostSource } from '../services/apiCosts';
 
@@ -19,6 +19,7 @@ interface ArticleStore {
   vocabOutputTokens: number;
 
   loadArticle: (input: string, isUrl: boolean, settings: UserSettings, source?: CostSource) => Promise<void>;
+  continueTranslation: (settings: UserSettings) => Promise<void>;
   lookupWord: (word: string, settings: UserSettings) => Promise<{ definition: string; partOfSpeech?: string; gender?: string; article?: string; infinitive?: string }>;
   toggleTTS: () => void;
   saveArticle: () => Promise<string | undefined>;
@@ -78,6 +79,7 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
         createdAt: Date.now(),
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
+        remainingText: result.remainingText,
       };
 
       set({ currentArticle: article, isLoading: false, loadingStep: 'Done' });
@@ -88,6 +90,54 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
         loadingStep: '',
         error: err instanceof Error ? err.message : 'An unexpected error occurred.',
       });
+    }
+  },
+
+  continueTranslation: async (settings) => {
+    const { currentArticle, savedArticles } = get();
+    if (!currentArticle?.remainingText) return;
+
+    set({ isLoading: true, loadingStep: 'Translating more…', error: null });
+    try {
+      const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY || '';
+      const result = await translateArticle(
+        currentArticle.remainingText,
+        currentArticle.sourceLanguage,
+        currentArticle.targetLanguage,
+        apiKey,
+        settings.difficulty ?? 'intermediate',
+        'article',
+      );
+
+      const updated: Article = {
+        ...currentArticle,
+        sentencePairs: [...currentArticle.sentencePairs, ...result.sentencePairs],
+        inputTokens: currentArticle.inputTokens + result.inputTokens,
+        outputTokens: currentArticle.outputTokens + result.outputTokens,
+        remainingText: result.remainingText,
+      };
+
+      const isSaved = savedArticles.some((a) => a.id === currentArticle.id);
+      if (isSaved) {
+        await apiPatchArticle(currentArticle.id, {
+          sentencePairsToAppend: result.sentencePairs,
+          remainingText: result.remainingText,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+        });
+        set({
+          currentArticle: updated,
+          savedArticles: savedArticles.map((a) => (a.id === updated.id ? updated : a)),
+        });
+      } else {
+        set({ currentArticle: updated });
+      }
+
+      useUsageStore.getState().addArticle(result.inputTokens, result.outputTokens);
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to continue translation.' });
+    } finally {
+      set({ isLoading: false, loadingStep: '' });
     }
   },
 

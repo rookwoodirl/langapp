@@ -13,11 +13,14 @@ export async function recordApiCost(params: {
   outputCreditRate: number;
   totalOutputCredits: number;
 }): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
   try {
     const userId = await getUserId();
     const res = await fetch(`${BACKEND_URL}/api-costs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
       body: JSON.stringify({
         user_id: userId,
         source: params.source,
@@ -34,5 +37,7 @@ export async function recordApiCost(params: {
     }
   } catch (err) {
     console.error('recordApiCost: network error', err);
+  } finally {
+    clearTimeout(timeout);
   }
 }

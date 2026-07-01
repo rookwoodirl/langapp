@@ -8,6 +8,7 @@ export interface TranslationResult {
   vocab: VocabWord[];
   inputTokens: number;
   outputTokens: number;
+  remainingText?: string;
 }
 
 const DIFFICULTY_INSTRUCTIONS: Record<string, string> = {
@@ -62,7 +63,9 @@ export async function translateArticle(
   if (!apiKey) throw new Error('No Anthropic API key is configured for this app.');
 
   const system = buildSystemPrompt(sourceLanguage, targetLanguage, difficulty);
-  const truncated = text.length > 40000 ? text.slice(0, 40000) + '…' : text;
+  const CHUNK_LIMIT = 40000;
+  const remainingText = text.length > CHUNK_LIMIT ? text.slice(CHUNK_LIMIT) : undefined;
+  const truncated = remainingText ? text.slice(0, CHUNK_LIMIT) : text;
 
   let result = await callLLM({
     source,
@@ -111,5 +114,6 @@ export async function translateArticle(
     vocab: parsed.vocab,
     inputTokens: totalInput,
     outputTokens: totalOutput,
+    remainingText,
   };
 }

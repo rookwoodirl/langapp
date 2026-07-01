@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
+  ActivityIndicator,
   FlatList,
   useWindowDimensions,
 } from 'react-native';
@@ -31,7 +32,7 @@ export default function ArticleScreen() {
   const styles = useMemo(() => themedStyles(colors), [colors]);
 
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { currentArticle, savedArticles, lookupWord, saveArticle, loadArticleById, vocabInputTokens, vocabOutputTokens, ttsPlaying, toggleTTS } = useArticleStore();
+  const { currentArticle, savedArticles, lookupWord, saveArticle, loadArticleById, continueTranslation, isLoading, loadingStep, vocabInputTokens, vocabOutputTokens, ttsPlaying, toggleTTS } = useArticleStore();
   const { addWord, words: vocabWords } = useVocabStore();
 
   const article = currentArticle?.id === id ? currentArticle : null;
@@ -206,6 +207,28 @@ export default function ArticleScreen() {
         )}
         contentContainerStyle={styles.listContent}
         style={styles.list}
+        ListFooterComponent={
+          article.remainingText ? (
+            <TouchableOpacity
+              style={styles.continueBtn}
+              onPress={async () => {
+                const raw = await AsyncStorage.getItem(SETTINGS_KEY);
+                const settings = raw ? JSON.parse(raw) : {};
+                await continueTranslation(settings);
+              }}
+              disabled={isLoading}
+              activeOpacity={0.8}
+            >
+              {isLoading ? (
+                <ActivityIndicator color={colors.accentText} />
+              ) : (
+                <Text style={styles.continueBtnText}>
+                  {loadingStep || 'Keep translating'}
+                </Text>
+              )}
+            </TouchableOpacity>
+          ) : null
+        }
       />
 
       <VocabPopup
@@ -274,7 +297,17 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   generateAudioText: { fontSize: 14, fontWeight: '600', color: colors.accent },
   generateAudioTextActive: { color: colors.accentText },
   list: { flex: 1 },
-  listContent: { padding: 16, paddingBottom: 120 },
+  listContent: { padding: 16, paddingBottom: 32 },
+  continueBtn: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 40,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+  },
+  continueBtnText: { fontSize: 15, fontWeight: '700', color: colors.accentText },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
   errorText: { fontSize: 16, color: colors.textMuted },
   link: { fontSize: 15, color: colors.accent },

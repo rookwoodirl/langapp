@@ -40,7 +40,8 @@ export async function callLLM(params: LLMParams): Promise<LLMResult> {
   if (content.type !== 'text') throw new Error('Unexpected response type from Claude');
 
   const rates = MODEL_RATES[model] ?? { input: 3.0, output: 15.0 };
-  await recordApiCost({
+  // Fire-and-forget — never block the caller waiting for the cost backend
+  recordApiCost({
     source,
     model,
     language,
@@ -48,7 +49,7 @@ export async function callLLM(params: LLMParams): Promise<LLMResult> {
     totalInputCredits: message.usage.input_tokens,
     outputCreditRate: rates.output,
     totalOutputCredits: message.usage.output_tokens,
-  });
+  }).catch(() => {});
 
   return {
     text: content.text,

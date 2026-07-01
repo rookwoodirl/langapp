@@ -16,8 +16,8 @@ router.post('/', async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO articles (user_id, url, title, source_language, target_language, original_sentences, translated_sentences, vocab, input_tokens, output_tokens)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO articles (user_id, url, title, source_language, target_language, original_sentences, translated_sentences, vocab, input_tokens, output_tokens, remaining_text)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING id, created_at`,
       [
         user_id,
@@ -30,6 +30,7 @@ router.post('/', async (req: Request, res: Response) => {
         JSON.stringify(vocab ?? []),
         input_tokens ?? 0,
         output_tokens ?? 0,
+        req.body.remaining_text ?? null,
       ]
     );
     return res.status(201).json(result.rows[0]);
@@ -49,7 +50,7 @@ router.get('/', async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, url, title, source_language, target_language, original_sentences, translated_sentences, vocab, input_tokens, output_tokens, created_at
+      `SELECT id, url, title, source_language, target_language, original_sentences, translated_sentences, vocab, input_tokens, output_tokens, remaining_text, created_at
        FROM articles
        WHERE user_id = $1 AND deleted = false
        ORDER BY created_at DESC
@@ -79,6 +80,57 @@ router.get('/:id', async (req: Request, res: Response) => {
     return res.json(result.rows[0]);
   } catch (err) {
     console.error('GET /articles/:id error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Append sentence pairs and update remaining_text for a saved article
+router.patch('/:id', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { user_id, sentence_pairs_to_append, remaining_text, input_tokens_to_add, output_tokens_to_add } = req.body;
+
+  if (!user_id || !Array.isArray(sentence_pairs_to_append)) {
+    return res.status(400).json({ error: 'user_id and sentence_pairs_to_append are required' });
+  }
+
+  try {
+    const existing = await pool.query(
+      `SELECT original_sentences, translated_sentences FROM articles WHERE id = $1 AND user_id = $2 AND deleted = false`,
+      [id, user_id]
+    );
+    if (!existing.rows.length) return res.status(404).json({ error: 'Article not found' });
+
+    const row = existing.rows[0];
+    const newOriginals = [
+      ...(row.original_sentences as string[]),
+      ...sentence_pairs_to_append.map((p: { original: string }) => p.original ?? ''),
+    ];
+    const newTranslated = [
+      ...(row.translated_sentences as string[]),
+      ...sentence_pairs_to_append.map((p: { translation: string }) => p.translation ?? ''),
+    ];
+
+    await pool.query(
+      `UPDATE articles
+       SET original_sentences = $1,
+           translated_sentences = $2,
+           remaining_text = $3,
+           input_tokens = input_tokens + $4,
+           output_tokens = output_tokens + $5
+       WHERE id = $6 AND user_id = $7`,
+      [
+        JSON.stringify(newOriginals),
+        JSON.stringify(newTranslated),
+        remaining_text ?? null,
+        input_tokens_to_add ?? 0,
+        output_tokens_to_add ?? 0,
+        id,
+        user_id,
+      ]
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('PATCH /articles/:id error:', err);
     return res.status(500).json({ error: 'Database error' });
   }
 });

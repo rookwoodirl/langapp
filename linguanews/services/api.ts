@@ -1,23 +1,12 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Article, NotecardList, ReviewGrade, UserVocabWord, VerbConjugation } from '../types';
+import { getAuthState } from './auth';
 
 const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL ?? '').replace(/\/$/, '');
-const USER_ID_KEY = '@linguanews/user_id';
-
-function generateUUID(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-  });
-}
 
 export async function getUserId(): Promise<string> {
-  let id = await AsyncStorage.getItem(USER_ID_KEY);
-  if (!id) {
-    id = generateUUID();
-    await AsyncStorage.setItem(USER_ID_KEY, id);
-  }
-  return id;
+  const auth = await getAuthState();
+  if (!auth) throw new Error('Not signed in');
+  return auth.userId;
 }
 
 // Safely parse JSON — if the server returns an HTML error page (gateway
@@ -48,6 +37,7 @@ function rowToArticle(row: Record<string, unknown>): Article {
     createdAt: new Date(row.created_at as string).getTime(),
     inputTokens: (row.input_tokens as number) ?? 0,
     outputTokens: (row.output_tokens as number) ?? 0,
+    remainingText: (row.remaining_text as string) || undefined,
   };
 }
 
@@ -66,11 +56,36 @@ export async function apiSaveArticle(article: Article): Promise<string> {
       vocab: article.vocabList,
       input_tokens: article.inputTokens ?? 0,
       output_tokens: article.outputTokens ?? 0,
+      remaining_text: article.remainingText ?? null,
     }),
   });
   const data = await parseJson(res) as Record<string, unknown>;
   if (!res.ok) throw new Error((data.error as string) ?? 'Failed to save article');
   return data.id as string;
+}
+
+export async function apiPatchArticle(id: string, params: {
+  sentencePairsToAppend: { original: string; translation: string }[];
+  remainingText?: string;
+  inputTokens: number;
+  outputTokens: number;
+}): Promise<void> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/articles/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: userId,
+      sentence_pairs_to_append: params.sentencePairsToAppend,
+      remaining_text: params.remainingText ?? null,
+      input_tokens_to_add: params.inputTokens,
+      output_tokens_to_add: params.outputTokens,
+    }),
+  });
+  if (!res.ok) {
+    const data = await parseJson(res).catch(() => ({})) as Record<string, unknown>;
+    throw new Error((data.error as string) ?? 'Failed to update article');
+  }
 }
 
 export async function apiLoadArticles(): Promise<Article[]> {

@@ -24,6 +24,7 @@ export interface Article {
   createdAt: number;
   inputTokens: number;
   outputTokens: number;
+  remainingText?: string;
 }
 
 export type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced';

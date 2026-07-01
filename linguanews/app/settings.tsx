@@ -8,6 +8,7 @@ import {
   Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { router } from 'expo-router';
 import LanguagePicker from '../components/LanguagePicker';
 import { useArticleStore } from '../store/articleStore';
 import { useThemeStore, ThemeMode } from '../store/themeStore';
@@ -15,6 +16,7 @@ import { useColors } from '../hooks/useColors';
 import { ThemeColors } from '../constants/theme';
 import { UserSettings } from '../types';
 import { DEFAULT_SOURCE_LANGUAGE, DEFAULT_TARGET_LANGUAGE } from '../constants/languages';
+import { getAuthState, clearAuthState } from '../services/auth';
 
 const SETTINGS_KEY = '@linguanews/settings';
 const THEME_OPTIONS: { mode: ThemeMode; label: string }[] = [
@@ -29,10 +31,15 @@ export default function SettingsScreen() {
     targetLanguage: DEFAULT_TARGET_LANGUAGE,
     difficulty: 'intermediate',
   });
+  const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const { clearSavedArticles } = useArticleStore();
   const { mode, setMode } = useThemeStore();
   const colors = useColors();
   const styles = themedStyles(colors);
+
+  useEffect(() => {
+    getAuthState().then((s) => setAccountEmail(s?.email ?? null));
+  }, []);
 
   useEffect(() => {
     AsyncStorage.getItem(SETTINGS_KEY).then((raw) => {
@@ -43,6 +50,20 @@ export default function SettingsScreen() {
   async function save(updated: UserSettings) {
     setSettings(updated);
     await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(updated));
+  }
+
+  function handleSignOut() {
+    Alert.alert('Sign out?', 'You will need to sign in again with Google.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: async () => {
+          await clearAuthState();
+          router.replace('/login');
+        },
+      },
+    ]);
   }
 
   function handleClearArticles() {
@@ -96,6 +117,12 @@ export default function SettingsScreen() {
         <Text style={styles.dangerText}>Clear saved articles</Text>
       </TouchableOpacity>
 
+      <Text style={styles.section}>Account</Text>
+      {accountEmail && <Text style={styles.accountEmail}>{accountEmail}</Text>}
+      <TouchableOpacity style={styles.dangerButton} onPress={handleSignOut}>
+        <Text style={styles.dangerText}>Sign out</Text>
+      </TouchableOpacity>
+
       <Text style={styles.section}>Disclaimers</Text>
       <Text style={styles.disclaimer}>
         Vocabulary definitions are provided freely by Wiktionary contributors under the
@@ -133,6 +160,7 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   themeBtnActive: { backgroundColor: colors.accent },
   themeBtnText: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
   themeBtnTextActive: { color: colors.accentText },
+  accountEmail: { fontSize: 14, color: colors.textMuted, marginBottom: 12 },
   dangerButton: {
     borderWidth: 1,
     borderColor: colors.danger,

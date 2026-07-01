@@ -152,6 +152,10 @@ export async function selectVocabWords(
   return { words, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
 }
 
+const ROMANCE_LANGUAGE_CODES = new Set(['es', 'fr', 'it', 'pt']);
+
+const ROMANCE_TENSES = ['Present', 'Imperfect', 'Preterite', 'Subjunctive', 'Future', 'Present Perfect', 'Present Progressive'];
+
 export async function getVerbConjugation(
   verb: string,
   language: string,
@@ -159,20 +163,27 @@ export async function getVerbConjugation(
 ): Promise<VerbConjugation | null> {
   if (!apiKey) return null;
   try {
+    const isRomance = ROMANCE_LANGUAGE_CODES.has(language);
+    const tenseInstruction = isRomance
+      ? `Include exactly these tenses (skip any that genuinely do not exist in ${language}): ${ROMANCE_TENSES.join(', ')}. ` +
+        `The "name" field must be EXACTLY one of: ${ROMANCE_TENSES.join(', ')}.`
+      : `Include the most important tenses for ${language}. Use standard English names for tense headers (e.g. Present, Past, Future).`;
+
     const result = await callLLM({
       source: 'vocab',
       apiKey,
       model: 'claude-haiku-4-5-20251001',
-      maxTokens: 512,
+      maxTokens: 800,
       language,
       messages: [
         {
           role: 'user',
           content:
-            `Give the infinitive and conjugations for the most important tenses of the ${language} verb "${verb}". ` +
-            `Use the pronoun labels appropriate for ${language}. ` +
+            `Give the infinitive and full conjugation tables for the ${language} verb "${verb}". ` +
+            tenseInstruction + ` ` +
+            `Use pronoun labels appropriate for ${language}. ` +
             `Reply with raw JSON only, no markdown:\n` +
-            `{"infinitive":"...","tenses":[{"name":"Present","forms":["...","...","...","...","...","..."]},{"name":"Past","forms":[...]},{"name":"Future","forms":[...]}]}`,
+            `{"infinitive":"...","tenses":[{"name":"Present","forms":["yo ...","tú ...","él/ella ...","nosotros ...","vosotros ...","ellos ..."]},...]}`
         },
       ],
     });

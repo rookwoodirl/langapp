@@ -7,6 +7,7 @@ import vocabRouter from './routes/vocab';
 import scrapeRouter from './routes/scrape';
 import apiCostsRouter from './routes/api-costs';
 import notecardsRouter from './routes/notecards';
+import authRouter from './routes/auth';
 
 dotenv.config();
 
@@ -29,6 +30,7 @@ app.get('/dbcheck', async (_req, res) => {
   }
 });
 
+app.use('/auth', authRouter);
 app.use('/articles', articlesRouter);
 app.use('/vocab', vocabRouter);
 app.use('/scrape', scrapeRouter);
@@ -127,6 +129,8 @@ async function migrate() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS notecard_list_items_list_id_idx ON notecard_list_items (list_id)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS notecard_list_items_user_vocab_id_idx ON notecard_list_items (user_vocab_id)`);
+
+  await pool.query(`ALTER TABLE articles ADD COLUMN IF NOT EXISTS remaining_text TEXT`);
 
   console.log('Migrations complete');
 }
