@@ -19,6 +19,63 @@ const OUTPUT_RATE = 15.0 / 1_000_000;
 const MODEL = 'claude-sonnet-4-6';
 const CHUNK_SIZE = 40_000;
 
+function buildSystem(sourceLanguage: string, targetLanguage: string, difficulty: string, nativeLanguage: string, includeTitle: boolean): string {
+  const difficultyNote = DIFFICULTY_INSTRUCTIONS[difficulty] ?? DIFFICULTY_INSTRUCTIONS.intermediate;
+  const titleInstruction = includeTitle
+    ? `First output a title line:\n` +
+      `{"title":"<concise title for this article, in ${nativeLanguage}>"}\n\n` +
+      `Then translate each sentence:\n`
+    : `Translate each sentence:\n`;
+
+  return (
+    `You are a language translation assistant. You will receive article text in ${sourceLanguage}.\n` +
+    `Reading difficulty: ${difficulty}. ${difficultyNote}\n\n` +
+    `Output only JSON objects, one per line. No markdown, no preamble, no explanation.\n\n` +
+    titleInstruction +
+    `{"original":"<exact original sentence>","translation":"<that sentence in ${targetLanguage}>"}\n\n` +
+    `Rules:\n` +
+    `- One JSON object per line — no arrays, no wrapper\n` +
+    `- Split on sentence-ending punctuation (. ! ?). Do not skip or merge sentences.\n` +
+    `- Escape internal quotes as \\" and backslashes as \\\\`
+  );
+}
+
+async function processLine(
+  line: string,
+  articleId: string,
+  rowOrderRef: { value: number },
+  resolvedTitleRef: { value: string | null },
+  sourceLanguage: string,
+  targetLanguage: string,
+): Promise<void> {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    return; // skip malformed lines
+  }
+
+  if (typeof parsed.title === 'string' && resolvedTitleRef.value === null) {
+    const t = parsed.title.trim();
+    if (t) {
+      resolvedTitleRef.value = t;
+      await pool.query(`UPDATE articles SET title = $1 WHERE id = $2`, [t, articleId]);
+    }
+    return;
+  }
+
+  if (typeof parsed.original === 'string' && typeof parsed.translation === 'string') {
+    await pool.query(
+      `INSERT INTO article_text (article_id, row_order, original, translated, source_language, target_language)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [articleId, rowOrderRef.value++, parsed.original, parsed.translation, sourceLanguage, targetLanguage],
+    );
+  }
+}
+
 export async function runTranslationJob(
   articleId: string,
   userId: string,
@@ -27,7 +84,7 @@ export async function runTranslationJob(
   targetLanguage: string,
   nativeLanguage: string,
   difficulty: string,
-  title?: string,
+  hintTitle?: string,
 ): Promise<void> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -39,22 +96,17 @@ export async function runTranslationJob(
   }
 
   const client = new Anthropic({ apiKey });
-  const difficultyNote = DIFFICULTY_INSTRUCTIONS[difficulty] ?? DIFFICULTY_INSTRUCTIONS.intermediate;
 
-  const system =
-    `You are a language translation assistant. You will receive article text in ${sourceLanguage}.\n` +
-    `Reading difficulty: ${difficulty}. ${difficultyNote}\n\n` +
-    `Translate the text sentence by sentence. For each sentence output exactly one JSON object on its own line:\n` +
-    `{"original":"<the exact original sentence>","translation":"<that sentence in ${targetLanguage}>"}\n\n` +
-    `Rules:\n` +
-    `- One JSON object per line — no arrays, no wrapper object\n` +
-    `- Split on sentence-ending punctuation (. ! ?). Do not skip or merge sentences.\n` +
-    `- All string values must be valid JSON strings: escape internal quotes as \\" and backslashes as \\\\\n` +
-    `- No markdown, no preamble, no explanation — only JSON lines`;
-
-  let rowOrder = 0;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  const rowOrderRef = { value: 0 };
+  // null = not yet extracted; string = extracted title
+  const resolvedTitleRef: { value: string | null } = { value: hintTitle?.trim() || null };
+
+  // If we already have a hint title from the scraper, store it immediately
+  if (resolvedTitleRef.value) {
+    await pool.query(`UPDATE articles SET title = $1 WHERE id = $2`, [resolvedTitleRef.value, articleId]);
+  }
 
   const chunks: string[] = [];
   for (let i = 0; i < text.length; i += CHUNK_SIZE) {
@@ -62,7 +114,12 @@ export async function runTranslationJob(
   }
 
   try {
-    for (const chunk of chunks) {
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+      const chunk = chunks[chunkIndex];
+      // Ask for title only on first chunk, and only if we don't have one yet
+      const includeTitle = chunkIndex === 0 && resolvedTitleRef.value === null;
+      const system = buildSystem(sourceLanguage, targetLanguage, difficulty, nativeLanguage, includeTitle);
+
       let buffer = '';
 
       const stream = await client.messages.create({
@@ -79,25 +136,11 @@ export async function runTranslationJob(
         }
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
           buffer += event.delta.text;
-
-          // Flush all complete lines from the buffer
           let newlineIdx: number;
           while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
-            const line = buffer.slice(0, newlineIdx).trim();
+            const line = buffer.slice(0, newlineIdx);
             buffer = buffer.slice(newlineIdx + 1);
-            if (!line) continue;
-            try {
-              const parsed = JSON.parse(line) as { original: string; translation: string };
-              if (typeof parsed.original === 'string' && typeof parsed.translation === 'string') {
-                await pool.query(
-                  `INSERT INTO article_text (article_id, row_order, original, translated, source_language, target_language)
-                   VALUES ($1, $2, $3, $4, $5, $6)`,
-                  [articleId, rowOrder++, parsed.original, parsed.translation, sourceLanguage, targetLanguage],
-                );
-              }
-            } catch {
-              // Malformed JSON line — skip
-            }
+            await processLine(line, articleId, rowOrderRef, resolvedTitleRef, sourceLanguage, targetLanguage);
           }
         }
         if (event.type === 'message_delta') {
@@ -105,33 +148,20 @@ export async function runTranslationJob(
         }
       }
 
-      // Flush any remaining buffer content after stream ends
-      const remaining = buffer.trim();
-      if (remaining) {
-        try {
-          const parsed = JSON.parse(remaining) as { original: string; translation: string };
-          if (typeof parsed.original === 'string' && typeof parsed.translation === 'string') {
-            await pool.query(
-              `INSERT INTO article_text (article_id, row_order, original, translated, source_language, target_language)
-               VALUES ($1, $2, $3, $4, $5, $6)`,
-              [articleId, rowOrder++, parsed.original, parsed.translation, sourceLanguage, targetLanguage],
-            );
-          }
-        } catch {
-          // ignore
-        }
+      // Flush remaining buffer
+      if (buffer.trim()) {
+        await processLine(buffer, articleId, rowOrderRef, resolvedTitleRef, sourceLanguage, targetLanguage);
       }
     }
 
-    // Record cost in api_costs (one row per article translation)
-    const description = title?.trim() || null;
+    const finalTitle = resolvedTitleRef.value;
+
     await pool.query(
       `INSERT INTO api_costs (user_id, source, model, language, input_credit_rate, total_input_credits, output_credit_rate, total_output_credits, description, article_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [userId, 'article', MODEL, targetLanguage, INPUT_RATE, totalInputTokens, OUTPUT_RATE, totalOutputTokens, description, articleId],
+      [userId, 'article', MODEL, targetLanguage, INPUT_RATE, totalInputTokens, OUTPUT_RATE, totalOutputTokens, finalTitle, articleId],
     );
 
-    // Mark complete with token totals
     await pool.query(
       `UPDATE articles SET status = 'complete', input_tokens = $1, output_tokens = $2 WHERE id = $3`,
       [totalInputTokens, totalOutputTokens, articleId],
