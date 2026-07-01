@@ -202,6 +202,7 @@ export default function ArticleScreen() {
             vocabList={article.vocabList}
             cardWidth={cardWidth}
             language={article.targetLanguage}
+            sourceLanguage={article.sourceLanguage}
             onWordTap={handleWordTap}
           />
         )}

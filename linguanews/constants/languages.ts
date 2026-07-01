@@ -25,6 +25,7 @@ export const LANGUAGES: Language[] = [
 
 export const DEFAULT_SOURCE_LANGUAGE = 'en';
 export const DEFAULT_TARGET_LANGUAGE = 'es';
+export const DEFAULT_NATIVE_LANGUAGE = 'en';
 
 // Languages with grammatical gender (and, accordingly, gendered definite articles).
 // Used to skip asking for gender/article on languages that don't have the concept (e.g. Chinese, Japanese, Korean, Turkish).

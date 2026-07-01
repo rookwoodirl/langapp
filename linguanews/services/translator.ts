@@ -23,7 +23,8 @@ const DIFFICULTY_INSTRUCTIONS: Record<string, string> = {
     'idiomatic expressions, nuanced vocabulary, and complex sentence structures.',
 };
 
-function buildSystemPrompt(sourceLanguage: string, targetLanguage: string, difficulty: string): string {
+
+function buildSystemPrompt(sourceLanguage: string, targetLanguage: string, difficulty: string, nativeLanguage: string): string {
   const difficultyNote = DIFFICULTY_INSTRUCTIONS[difficulty] ?? DIFFICULTY_INSTRUCTIONS.intermediate;
   return (
     `You are a language translation assistant. You will receive article text in ${sourceLanguage}.\n` +
@@ -35,7 +36,7 @@ function buildSystemPrompt(sourceLanguage: string, targetLanguage: string, diffi
     `  Split on sentence-ending punctuation (., !, ?). Do not skip or merge sentences.\n` +
     `- "vocab": an array of 10–20 key vocabulary objects from the translations, written as a translation dictionary would. Each object has:\n` +
     `  - "word": as it appears in the translations\n` +
-    `  - "definition": in ${sourceLanguage}; for verbs begin with "to" (e.g. "to run"); for nouns use a short noun phrase\n` +
+    `  - "definition": in ${nativeLanguage}; for verbs begin with "to" (e.g. "to run"); for nouns use a short noun phrase\n` +
     `  - "partOfSpeech": grammatical category\n` +
     `  - "gender": for nouns — "masculine", "feminine", "neuter", or "common"; omit for non-nouns\n` +
     `  - "article": for nouns — the definite article in ${targetLanguage}; omit for non-nouns\n\n` +
@@ -59,10 +60,11 @@ export async function translateArticle(
   apiKey: string,
   difficulty = 'intermediate',
   source: CostSource = 'article',
+  nativeLanguage = 'en',
 ): Promise<TranslationResult> {
   if (!apiKey) throw new Error('No Anthropic API key is configured for this app.');
 
-  const system = buildSystemPrompt(sourceLanguage, targetLanguage, difficulty);
+  const system = buildSystemPrompt(sourceLanguage, targetLanguage, difficulty, nativeLanguage);
   const CHUNK_LIMIT = 40000;
   const remainingText = text.length > CHUNK_LIMIT ? text.slice(CHUNK_LIMIT) : undefined;
   const truncated = remainingText ? text.slice(0, CHUNK_LIMIT) : text;
@@ -117,3 +119,4 @@ export async function translateArticle(
     remainingText,
   };
 }
+

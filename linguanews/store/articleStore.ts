@@ -67,6 +67,7 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
         apiKey,
         settings.difficulty ?? 'intermediate',
         source,
+        settings.nativeLanguage ?? 'en',
       );
 
       const article: Article = {
@@ -151,7 +152,7 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
     const result: LookupResult = await lookupWordDefinition(
       word,
       settings.targetLanguage,
-      settings.sourceLanguage,
+      settings.nativeLanguage ?? 'en',
       apiKey,
       articleText,
     );

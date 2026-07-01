@@ -32,6 +32,7 @@ export type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced';
 export interface UserSettings {
   sourceLanguage: LanguageCode;
   targetLanguage: LanguageCode;
+  nativeLanguage: LanguageCode;
   difficulty: DifficultyLevel;
 }
 

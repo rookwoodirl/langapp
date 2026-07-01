@@ -24,13 +24,13 @@ function extractContext(text: string, word: string, radius = 400): string {
 export async function lookupWordDefinition(
   word: string,
   targetLanguage: string,
-  sourceLanguage: string,
+  nativeLanguage: string,
   apiKey: string,
   articleContext?: string,
 ): Promise<LookupResult> {
-  // Wiktionary covers English-source lookups with zero LLM cost.
-  // Non-English source falls through to LLM so definitions come in the right language.
-  if (sourceLanguage === 'en') {
+  // Wiktionary covers English-native lookups with zero LLM cost.
+  // Non-English native falls through to LLM so definitions come in the right language.
+  if (nativeLanguage === 'en') {
     const wikt = await lookupWiktionary(word, targetLanguage);
     if (wikt) {
       return {
@@ -53,11 +53,11 @@ export async function lookupWordDefinition(
     : '';
 
   const system =
-    `You are a bilingual translation dictionary. A ${sourceLanguage} speaker is learning ${targetLanguage}. ` +
+    `You are a bilingual translation dictionary. A ${nativeLanguage} speaker is learning ${targetLanguage}. ` +
     `${contextLine}` +
     `Given a ${targetLanguage} word or phrase, return a JSON dictionary entry with these keys:\n` +
-    `- "definition": concise definition in ${sourceLanguage}, as a translation dictionary would write it. ` +
-    `For verbs and verb phrases (including conjugated forms), convert to the infinitive and begin with "to <infinitive in ${sourceLanguage}>" (e.g. "to run", "to have eaten"). ` +
+    `- "definition": concise definition in ${nativeLanguage}, as a translation dictionary would write it. ` +
+    `For verbs and verb phrases (including conjugated forms), convert to the infinitive and begin with "to <infinitive in ${nativeLanguage}>" (e.g. "to run", "to have eaten"). ` +
     `For nouns, use a short noun phrase.\n` +
     `- "partOfSpeech": grammatical category (noun, verb, adjective, adverb, phrase, etc.)\n` +
     `- "infinitive": for verbs and verb phrases only — the infinitive/base form in ${targetLanguage} (e.g. "laufen", "être", "haber comido"); omit for non-verbs\n` +
@@ -113,7 +113,7 @@ export async function lookupWordDefinition(
 export async function selectVocabWords(
   translatedText: string,
   targetLanguage: string,
-  sourceLanguage: string,
+  nativeLanguage: string,
   existingWords: string[],
   apiKey: string,
 ): Promise<{ words: string[]; inputTokens: number; outputTokens: number }> {
@@ -128,7 +128,7 @@ export async function selectVocabWords(
     maxTokens: 256,
     language: targetLanguage,
     system:
-      `You are a language learning assistant helping a ${sourceLanguage} speaker learn ${targetLanguage}. ` +
+      `You are a language learning assistant helping a ${nativeLanguage} speaker learn ${targetLanguage}. ` +
       `Identify the most useful vocabulary words from the given text for the learner to study.${knownStr}`,
     messages: [
       {

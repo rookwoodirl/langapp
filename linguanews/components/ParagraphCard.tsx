@@ -19,6 +19,7 @@ interface Props {
   vocabList: VocabWord[];
   cardWidth: number;
   language: string;
+  sourceLanguage?: string;
   onWordTap: (word: string, definition?: string, partOfSpeech?: string) => void;
 }
 
@@ -49,7 +50,7 @@ function cleanToken(t: string): string {
   return t.replace(/[^a-zA-ZÀ-ÿÀ-ɏḀ-ỿ]/g, '');
 }
 
-export default function ParagraphCard({ pair, vocabList, cardWidth, language, onWordTap }: Props) {
+export default function ParagraphCard({ pair, vocabList, cardWidth, language, sourceLanguage, onWordTap }: Props) {
   const colors = useColors();
   const styles = useMemo(() => themedStyles(colors), [colors]);
   const pagerRef = useRef<ScrollView>(null);
@@ -111,6 +112,25 @@ export default function ParagraphCard({ pair, vocabList, cardWidth, language, on
   }, [segments, language]);
 
   const sortedKeys = useMemo(() => tokens.filter((t) => !t.isSpace).map((t) => t.key), [tokens]);
+
+  const originalTokens: Token[] = useMemo(() => {
+    if (!pair.original) return [];
+    const result: Token[] = [];
+    const segLang = sourceLanguage ?? language;
+    if (isCharacterSegmented(segLang)) {
+      Array.from(pair.original).forEach((ch, i) => {
+        const isSpace = /^\s+$/.test(ch);
+        result.push({ key: `o-${i}`, display: ch, lookup: isSpace ? ' ' : ch, isVocab: false, isSpace });
+      });
+    } else {
+      pair.original.split(/(\s+)/).forEach((tok, i) => {
+        if (!tok) return;
+        const isSpace = /^\s+$/.test(tok);
+        result.push({ key: `o-${i}`, display: tok, lookup: isSpace ? ' ' : cleanToken(tok), isVocab: false, isSpace });
+      });
+    }
+    return result;
+  }, [pair.original, sourceLanguage, language]);
 
   // Keep live ref in sync with React state
   useEffect(() => { live.current.sortedKeys = sortedKeys; }, [sortedKeys]);
@@ -270,7 +290,23 @@ export default function ParagraphCard({ pair, vocabList, cardWidth, language, on
         <View style={{ width: cardWidth, padding: 14 }}>
           <Text style={styles.pageLabel}>Original</Text>
           {pair.original ? (
-            <Text style={styles.body}>{pair.original}</Text>
+            <View style={styles.bodyRow}>
+              {originalTokens.map((token) => {
+                if (token.isSpace) {
+                  return <Text key={token.key} style={styles.space}>{token.display}</Text>;
+                }
+                return (
+                  <Text
+                    key={token.key}
+                    style={[styles.tokenBase, styles.plainWord]}
+                    onPress={() => token.lookup && onWordTap(token.lookup)}
+                    suppressHighlighting
+                  >
+                    {token.display}
+                  </Text>
+                );
+              })}
+            </View>
           ) : (
             <Text style={styles.unavailable}>Original not available</Text>
           )}

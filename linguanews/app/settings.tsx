@@ -15,7 +15,7 @@ import { useThemeStore, ThemeMode } from '../store/themeStore';
 import { useColors } from '../hooks/useColors';
 import { ThemeColors } from '../constants/theme';
 import { UserSettings } from '../types';
-import { DEFAULT_SOURCE_LANGUAGE, DEFAULT_TARGET_LANGUAGE } from '../constants/languages';
+import { DEFAULT_SOURCE_LANGUAGE, DEFAULT_TARGET_LANGUAGE, DEFAULT_NATIVE_LANGUAGE } from '../constants/languages';
 import { getAuthState, clearAuthState } from '../services/auth';
 
 const SETTINGS_KEY = '@linguanews/settings';
@@ -29,6 +29,7 @@ export default function SettingsScreen() {
   const [settings, setSettings] = useState<UserSettings>({
     sourceLanguage: DEFAULT_SOURCE_LANGUAGE,
     targetLanguage: DEFAULT_TARGET_LANGUAGE,
+    nativeLanguage: DEFAULT_NATIVE_LANGUAGE,
     difficulty: 'intermediate',
   });
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
@@ -43,7 +44,11 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     AsyncStorage.getItem(SETTINGS_KEY).then((raw) => {
-      if (raw) setSettings(JSON.parse(raw));
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        // Merge with defaults so new fields are present even for old stored settings
+        setSettings((prev) => ({ ...prev, ...parsed }));
+      }
     });
   }, []);
 
@@ -99,6 +104,12 @@ export default function SettingsScreen() {
       </View>
 
       <Text style={styles.section}>Language preferences</Text>
+
+      <LanguagePicker
+        label="Your language (definitions will be in this language)"
+        value={settings.nativeLanguage ?? DEFAULT_NATIVE_LANGUAGE}
+        onChange={(v) => save({ ...settings, nativeLanguage: v })}
+      />
 
       <LanguagePicker
         label="Source language (what you read)"

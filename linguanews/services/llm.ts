@@ -28,7 +28,7 @@ export async function callLLM(params: LLMParams): Promise<LLMResult> {
 
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
 
-  const req: Parameters<typeof client.messages.create>[0] = {
+  const req: Anthropic.MessageCreateParamsNonStreaming = {
     model,
     max_tokens: maxTokens,
     messages,
@@ -57,3 +57,4 @@ export async function callLLM(params: LLMParams): Promise<LLMResult> {
     outputTokens: message.usage.output_tokens,
   };
 }
+

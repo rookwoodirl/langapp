@@ -22,7 +22,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useArticle } from '../hooks/useArticle';
 import LanguagePicker from '../components/LanguagePicker';
 import { UserSettings, Article, UserVocabWord, DifficultyLevel, NotecardList } from '../types';
-import { DEFAULT_SOURCE_LANGUAGE, DEFAULT_TARGET_LANGUAGE, getLanguageName } from '../constants/languages';
+import { DEFAULT_SOURCE_LANGUAGE, DEFAULT_TARGET_LANGUAGE, DEFAULT_NATIVE_LANGUAGE, getLanguageName } from '../constants/languages';
 import { useArticleStore } from '../store/articleStore';
 import { useVocabStore } from '../store/vocabStore';
 import { useNotecardStore } from '../store/notecardStore';
@@ -62,6 +62,7 @@ export default function HomeScreen() {
   const [settings, setSettings] = useState<UserSettings>({
     sourceLanguage: DEFAULT_SOURCE_LANGUAGE,
     targetLanguage: DEFAULT_TARGET_LANGUAGE,
+    nativeLanguage: DEFAULT_NATIVE_LANGUAGE,
     difficulty: 'intermediate',
   });
 
@@ -207,7 +208,7 @@ export default function HomeScreen() {
 
   useEffect(() => {
     AsyncStorage.getItem(SETTINGS_KEY).then((raw) => {
-      if (raw) setSettings(JSON.parse(raw));
+      if (raw) setSettings((prev) => ({ ...prev, ...JSON.parse(raw) }));
     });
     loadUsage();
   }, []);
@@ -278,14 +279,14 @@ export default function HomeScreen() {
 
       // Step 1: pick words (cheap selection call)
       const selection = await selectVocabWords(
-        articleText, article.targetLanguage, article.sourceLanguage, existing, apiKey
+        articleText, article.targetLanguage, settings.nativeLanguage ?? 'en', existing, apiKey
       );
       useUsageStore.getState().addVocab(selection.inputTokens, selection.outputTokens);
 
       // Step 2: look up each word through the same pipeline as word taps
       const lookups = await Promise.all(
         selection.words.map((word) =>
-          lookupWordDefinition(word, article.targetLanguage, article.sourceLanguage, apiKey, articleText)
+          lookupWordDefinition(word, article.targetLanguage, settings.nativeLanguage ?? 'en', apiKey, articleText)
         )
       );
       useUsageStore.getState().addVocab(
