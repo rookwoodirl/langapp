@@ -74,21 +74,22 @@ router.get('/:id/sentences', async (req: Request, res: Response) => {
   }
 });
 
-// Save a translated article
+// Save a translated article (or create a stub with status='translating' for device translation)
 router.post('/', async (req: Request, res: Response) => {
-  const { user_id, url, title, source_language, target_language, sentence_pairs, vocab, input_tokens, output_tokens } = req.body;
+  const { user_id, url, title, source_language, target_language, sentence_pairs, vocab, input_tokens, output_tokens, status } = req.body;
 
-  if (!user_id || !Array.isArray(sentence_pairs) || sentence_pairs.length === 0) {
-    return res.status(400).json({ error: 'user_id and sentence_pairs (non-empty) are required' });
+  if (!user_id || !Array.isArray(sentence_pairs)) {
+    return res.status(400).json({ error: 'user_id and sentence_pairs are required' });
   }
 
+  const articleStatus = (status as string) || 'complete';
   const originalSentences: string[] = sentence_pairs.map((p: { original: string }) => p.original ?? '');
   const translatedSentences: string[] = sentence_pairs.map((p: { translation: string }) => p.translation ?? '');
 
   try {
     const result = await pool.query(
-      `INSERT INTO articles (user_id, url, title, source_language, target_language, original_sentences, translated_sentences, vocab, input_tokens, output_tokens, remaining_text)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `INSERT INTO articles (user_id, url, title, source_language, target_language, original_sentences, translated_sentences, vocab, input_tokens, output_tokens, remaining_text, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING id, created_at`,
       [
         user_id,
@@ -102,11 +103,56 @@ router.post('/', async (req: Request, res: Response) => {
         input_tokens ?? 0,
         output_tokens ?? 0,
         req.body.remaining_text ?? null,
+        articleStatus,
       ]
     );
     return res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error('POST /articles error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Append sentences to article_text for device translation streaming
+router.post('/:id/text', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { user_id, sentences, complete } = req.body;
+
+  if (!user_id || !Array.isArray(sentences)) {
+    return res.status(400).json({ error: 'user_id and sentences are required' });
+  }
+
+  try {
+    const check = await pool.query(
+      `SELECT source_language, target_language FROM articles WHERE id = $1 AND user_id = $2 AND deleted = false`,
+      [id, user_id],
+    );
+    if (!check.rows.length) return res.status(404).json({ error: 'Article not found' });
+    const { source_language, target_language } = check.rows[0];
+
+    if (sentences.length > 0) {
+      const maxResult = await pool.query(
+        `SELECT COALESCE(MAX(row_order) + 1, 0) AS next_row FROM article_text WHERE article_id = $1`,
+        [id],
+      );
+      const startRow = parseInt(maxResult.rows[0].next_row as string, 10);
+      for (let i = 0; i < sentences.length; i++) {
+        const s = sentences[i] as { original: string; translation: string };
+        await pool.query(
+          `INSERT INTO article_text (article_id, row_order, original, translated, source_language, target_language)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [id, startRow + i, s.original, s.translation, source_language, target_language],
+        );
+      }
+    }
+
+    if (complete) {
+      await pool.query(`UPDATE articles SET status = 'complete' WHERE id = $1`, [id]);
+    }
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('POST /articles/:id/text error:', err);
     return res.status(500).json({ error: 'Database error' });
   }
 });

@@ -16,7 +16,7 @@ import {
   NativeScrollEvent,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useArticle } from '../hooks/useArticle';
@@ -41,6 +41,7 @@ import { SOURCE_ORDER, SOURCE_LABELS } from '../constants/costs';
 const DIFFICULTIES: DifficultyLevel[] = ['beginner', 'intermediate', 'advanced'];
 
 const SETTINGS_KEY = '@linguanews/settings';
+const CONFIRMED_DEVICE_PAIRS_KEY = '@linguanews/confirmed_device_pairs';
 
 const TABS = ['Translate', 'Articles', 'Vocab', 'Review', 'Cost'] as const;
 const COST_TIME_RANGES = [
@@ -206,12 +207,15 @@ export default function HomeScreen() {
     }
   }
 
-  useEffect(() => {
-    AsyncStorage.getItem(SETTINGS_KEY).then((raw) => {
-      if (raw) setSettings((prev) => ({ ...prev, ...JSON.parse(raw) }));
-    });
-    loadUsage();
-  }, []);
+  useEffect(() => { loadUsage(); }, []);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      AsyncStorage.getItem(SETTINGS_KEY).then((raw) => {
+        if (raw) setSettings((prev) => ({ ...prev, ...JSON.parse(raw) }));
+      });
+    }, []),
+  );
 
   // No auto-navigate: translation now starts a background job on the server.
   // Navigation is handled explicitly in handleTranslate.
@@ -255,28 +259,61 @@ export default function HomeScreen() {
     }
     const src = pendingSourceRef.current;
     pendingSourceRef.current = 'article';
-    Alert.alert(
-      'Translate article?',
-      'This will send the article to Claude for translation. Estimated cost: max $1.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Translate',
-          onPress: async () => {
-            await fetchArticle(url.trim(), true, settings, src);
-            // fetchArticle now returns quickly — the translation runs on the server
-            if (!useArticleStore.getState().error) {
-              Alert.alert(
-                'Translation started',
-                'Your article is being translated sentence by sentence. It will appear in the Articles section as it comes in.',
-                [{ text: 'Go to Articles', onPress: () => { scrollToTab(1); loadSavedArticles(); } },
-                 { text: 'OK', style: 'cancel' }],
-              );
-            }
-          },
-        },
-      ]
-    );
+    const usingLLM = settings.useLLM !== false;
+
+    async function doTranslate() {
+      await fetchArticle(url.trim(), true, settings, src);
+      if (useArticleStore.getState().error) return;
+      Alert.alert(
+        'Translation started',
+        'Your article is being translated sentence by sentence. It will appear in the Articles section as it comes in.',
+        [{ text: 'Go to Articles', onPress: () => { scrollToTab(1); loadSavedArticles(); } },
+         { text: 'OK', style: 'cancel' }],
+      );
+    }
+
+    async function confirmAndTranslate() {
+      Alert.alert(
+        'Translate article?',
+        usingLLM
+          ? 'This will send the article to Claude for translation. Estimated cost: max $1.'
+          : 'This will translate the article using a free on-device service.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Translate', onPress: doTranslate },
+        ],
+      );
+    }
+
+    if (!usingLLM) {
+      const pairKey = `${settings.sourceLanguage}|${settings.targetLanguage}`;
+      const raw = await AsyncStorage.getItem(CONFIRMED_DEVICE_PAIRS_KEY);
+      const confirmed: string[] = raw ? JSON.parse(raw) : [];
+      if (!confirmed.includes(pairKey)) {
+        const fromName = getLanguageName(settings.sourceLanguage);
+        const toName = getLanguageName(settings.targetLanguage);
+        Alert.alert(
+          'Set up language pair?',
+          `Enable on-device translation for ${fromName} → ${toName}? When you later move to native builds, a language pack (~30MB) will be downloaded here once per pair.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Enable',
+              onPress: async () => {
+                await AsyncStorage.setItem(
+                  CONFIRMED_DEVICE_PAIRS_KEY,
+                  JSON.stringify([...confirmed, pairKey]),
+                );
+                confirmAndTranslate();
+              },
+            },
+          ],
+        );
+        return;
+      }
+    }
+
+    confirmAndTranslate();
   }
 
   async function handleGenerateVocab(article: Article) {
@@ -452,6 +489,36 @@ export default function HomeScreen() {
               </Text>
             </TouchableOpacity>
           ))}
+        </View>
+      </View>
+
+      <View style={styles.difficultyCard}>
+        <View style={styles.translationModeHeader}>
+          <Text style={styles.cardLabel}>Translation</Text>
+          <TouchableOpacity
+            hitSlop={8}
+            onPress={() => Alert.alert(
+              'Translation mode',
+              'On-device translation is free but may be less accurate.\n\nLLM translation (Claude) produces higher quality results but has an associated cost per article.',
+            )}
+          >
+            <Text style={styles.infoIcon}>ⓘ</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={styles.difficultyRow}>
+          {([['llm', 'Claude (LLM)'], ['device', 'On-device (free)']] as const).map(([mode, label]) => {
+            const active = mode === 'llm' ? settings.useLLM !== false : settings.useLLM === false;
+            return (
+              <TouchableOpacity
+                key={mode}
+                style={[styles.difficultyBtn, active && styles.difficultyBtnActive]}
+                onPress={() => updateSetting('useLLM', mode === 'llm')}
+                activeOpacity={0.75}
+              >
+                <Text style={[styles.difficultyText, active && styles.difficultyTextActive]}>{label}</Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </View>
 
@@ -1261,6 +1328,12 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
   },
+  translationModeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  infoIcon: { fontSize: 16, color: colors.textFaint, marginTop: -1 },
   difficultyBtn: {
     flex: 1,
     paddingVertical: 10,

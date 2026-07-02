@@ -2,7 +2,8 @@ import { create } from 'zustand';
 import { Article, SentencePair, UserSettings } from '../types';
 import { scrapeArticle } from '../services/scraper';
 import { lookupWordDefinition, LookupResult } from '../services/vocab';
-import { apiSaveArticle, apiLoadArticles, apiLoadArticle, apiDeleteArticle, apiClearArticles, apiPatchArticle, apiStartTranslation, apiContinueTranslation } from '../services/api';
+import { apiSaveArticle, apiLoadArticles, apiLoadArticle, apiDeleteArticle, apiClearArticles, apiPatchArticle, apiStartTranslation, apiContinueTranslation, apiCreateDeviceArticle, apiAppendDeviceSentences } from '../services/api';
+import { translateArticleOnDevice, translateTextOnDevice } from '../services/deviceTranslation';
 import { useUsageStore } from './usageStore';
 import { CostSource } from '../services/apiCosts';
 
@@ -60,38 +61,98 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
         rawText = input;
       }
 
-      set({ loadingStep: 'Sending to server…' });
-      const { id } = await apiStartTranslation({
-        text: rawText,
-        sourceUrl,
-        title,
-        sourceLanguage: settings.sourceLanguage,
-        targetLanguage: settings.targetLanguage,
-        nativeLanguage: settings.nativeLanguage ?? 'en',
-        difficulty: settings.difficulty ?? 'intermediate',
-      });
+      if (settings.useLLM !== false) {
+        // LLM path — backend translates asynchronously, frontend polls
+        set({ loadingStep: 'Sending to server…' });
+        const { id } = await apiStartTranslation({
+          text: rawText,
+          sourceUrl,
+          title,
+          sourceLanguage: settings.sourceLanguage,
+          targetLanguage: settings.targetLanguage,
+          nativeLanguage: settings.nativeLanguage ?? 'en',
+          difficulty: settings.difficulty ?? 'intermediate',
+        });
 
-      // Create stub so it shows in Articles list immediately
-      const stub: Article = {
-        id,
-        title,
-        sourceUrl: sourceUrl ?? '',
-        sourceLanguage: settings.sourceLanguage,
-        targetLanguage: settings.targetLanguage,
-        sentencePairs: [],
-        vocabList: [],
-        createdAt: Date.now(),
-        inputTokens: 0,
-        outputTokens: 0,
-        status: 'translating',
-      };
+        const stub: Article = {
+          id,
+          title,
+          sourceUrl: sourceUrl ?? '',
+          sourceLanguage: settings.sourceLanguage,
+          targetLanguage: settings.targetLanguage,
+          sentencePairs: [],
+          vocabList: [],
+          createdAt: Date.now(),
+          inputTokens: 0,
+          outputTokens: 0,
+          status: 'translating',
+        };
 
-      set((state) => ({
-        isLoading: false,
-        loadingStep: '',
-        currentArticle: stub,
-        savedArticles: [stub, ...state.savedArticles.filter((a) => a.id !== id)],
-      }));
+        set((state) => ({
+          isLoading: false,
+          loadingStep: '',
+          currentArticle: stub,
+          savedArticles: [stub, ...state.savedArticles.filter((a) => a.id !== id)],
+        }));
+      } else {
+        // Device translation path — create stub immediately, stream sentences in background
+        let translatedTitle = title;
+        if (title) {
+          try {
+            translatedTitle = await translateTextOnDevice(title, settings.sourceLanguage, settings.targetLanguage);
+          } catch {
+            // Keep original title on failure
+          }
+        }
+
+        set({ loadingStep: 'Preparing…' });
+        const { id } = await apiCreateDeviceArticle({
+          sourceUrl: sourceUrl ?? '',
+          title: translatedTitle,
+          sourceLanguage: settings.sourceLanguage,
+          targetLanguage: settings.targetLanguage,
+        });
+
+        const stub: Article = {
+          id,
+          title: translatedTitle,
+          sourceUrl: sourceUrl ?? '',
+          sourceLanguage: settings.sourceLanguage,
+          targetLanguage: settings.targetLanguage,
+          sentencePairs: [],
+          vocabList: [],
+          createdAt: Date.now(),
+          inputTokens: 0,
+          outputTokens: 0,
+          status: 'translating',
+        };
+
+        set((state) => ({
+          isLoading: false,
+          loadingStep: '',
+          currentArticle: stub,
+          savedArticles: [stub, ...state.savedArticles.filter((a) => a.id !== id)],
+        }));
+
+        // Fire-and-forget — same pattern as LLM path
+        void (async () => {
+          try {
+            await translateArticleOnDevice(
+              rawText,
+              settings.sourceLanguage,
+              settings.targetLanguage,
+              async (pair) => {
+                get().appendSentences(id, [pair], 'translating');
+                await apiAppendDeviceSentences(id, [pair], false);
+              },
+            );
+            get().appendSentences(id, [], 'complete');
+            await apiAppendDeviceSentences(id, [], true);
+          } catch {
+            get().appendSentences(id, [], 'error');
+          }
+        })();
+      }
     } catch (err) {
       set({
         isLoading: false,

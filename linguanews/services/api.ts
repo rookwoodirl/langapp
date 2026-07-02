@@ -96,7 +96,7 @@ export async function apiSaveArticle(article: Article): Promise<string> {
     body: JSON.stringify({
       user_id: userId,
       url: article.sourceUrl || null,
-      title: null,
+      title: article.title ?? null,
       source_language: article.sourceLanguage,
       target_language: article.targetLanguage,
       sentence_pairs: article.sentencePairs ?? [],
@@ -310,6 +310,51 @@ export async function apiGetVerbConjugation(params: {
     inputTokens: (data.inputTokens as number) ?? 0,
     outputTokens: (data.outputTokens as number) ?? 0,
   };
+}
+
+export async function apiCreateDeviceArticle(params: {
+  sourceUrl: string;
+  title?: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+}): Promise<{ id: string }> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/articles`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: userId,
+      url: params.sourceUrl || null,
+      title: params.title ?? null,
+      source_language: params.sourceLanguage,
+      target_language: params.targetLanguage,
+      sentence_pairs: [],
+      vocab: [],
+      input_tokens: 0,
+      output_tokens: 0,
+      status: 'translating',
+    }),
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Failed to create article');
+  return { id: data.id as string };
+}
+
+export async function apiAppendDeviceSentences(
+  articleId: string,
+  sentences: { original: string; translation: string }[],
+  complete: boolean,
+): Promise<void> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/articles/${encodeURIComponent(articleId)}/text`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, sentences, complete }),
+  });
+  if (!res.ok) {
+    const data = await parseJson(res).catch(() => ({})) as Record<string, unknown>;
+    throw new Error((data.error as string) ?? 'Failed to append sentences');
+  }
 }
 
 export async function apiClearArticles(): Promise<void> {

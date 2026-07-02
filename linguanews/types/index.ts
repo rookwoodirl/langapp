@@ -37,6 +37,7 @@ export interface UserSettings {
   targetLanguage: LanguageCode;
   nativeLanguage: LanguageCode;
   difficulty: DifficultyLevel;
+  useLLM?: boolean;
 }
 
 export interface VerbTense {
