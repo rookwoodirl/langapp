@@ -1,30 +1,35 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../db';
 import { runTranslationJob, runContinuationJob } from '../translationService';
+import { requireAuth } from '../middleware/auth';
+import { checkBalance, InsufficientCreditsError } from '../creditService';
 
 const router = Router();
 
 // Start a background streaming translation job
-router.post('/translate', async (req: Request, res: Response) => {
-  const { user_id, text, url, title, source_language, target_language, native_language, difficulty } = req.body;
+router.post('/translate', requireAuth, async (req: Request, res: Response) => {
+  const userId = req.userId as string;
+  const { text, url, title, source_language, target_language, native_language, difficulty } = req.body;
 
-  if (!user_id || !text || !source_language || !target_language) {
-    return res.status(400).json({ error: 'user_id, text, source_language, and target_language are required' });
+  if (!text || !source_language || !target_language) {
+    return res.status(400).json({ error: 'text, source_language, and target_language are required' });
   }
 
   try {
+    await checkBalance(userId);
+
     const result = await pool.query(
       `INSERT INTO articles (user_id, url, title, source_language, target_language, status, original_sentences, translated_sentences, vocab)
        VALUES ($1, $2, $3, $4, $5, 'translating', '[]', '[]', '[]')
        RETURNING id`,
-      [user_id, url ?? null, title ?? null, source_language, target_language],
+      [userId, url ?? null, title ?? null, source_language, target_language],
     );
     const articleId = result.rows[0].id as string;
 
     // Fire-and-forget — response is already sent
     void runTranslationJob(
       articleId,
-      user_id as string,
+      userId,
       text as string,
       source_language as string,
       target_language as string,
@@ -35,6 +40,9 @@ router.post('/translate', async (req: Request, res: Response) => {
 
     return res.status(201).json({ id: articleId });
   } catch (err) {
+    if (err instanceof InsufficientCreditsError) {
+      return res.status(402).json({ error: 'insufficient_credits', balanceUsd: err.balanceUsd });
+    }
     console.error('POST /articles/translate error:', err);
     return res.status(500).json({ error: 'Database error' });
   }
@@ -233,17 +241,18 @@ router.get('/:id', async (req: Request, res: Response) => {
 });
 
 // Continue translating an article that has remaining_text (legacy articles)
-router.post('/:id/continue', async (req: Request, res: Response) => {
+router.post('/:id/continue', requireAuth, async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { user_id, difficulty, native_language } = req.body;
-
-  if (!user_id) return res.status(400).json({ error: 'user_id is required' });
+  const userId = req.userId as string;
+  const { difficulty, native_language } = req.body;
 
   try {
+    await checkBalance(userId);
+
     const articleResult = await pool.query(
       `SELECT remaining_text, source_language, target_language FROM articles
        WHERE id = $1 AND user_id = $2 AND deleted = false`,
-      [id, user_id],
+      [id, userId],
     );
     if (articleResult.rows.length === 0) return res.status(404).json({ error: 'Article not found' });
 
@@ -262,7 +271,7 @@ router.post('/:id/continue', async (req: Request, res: Response) => {
     );
 
     void runContinuationJob(
-      id, user_id as string,
+      id, userId,
       remaining_text as string,
       source_language as string, target_language as string,
       (native_language as string) ?? 'en',
@@ -272,6 +281,9 @@ router.post('/:id/continue', async (req: Request, res: Response) => {
 
     return res.json({ status: 'translating' });
   } catch (err) {
+    if (err instanceof InsufficientCreditsError) {
+      return res.status(402).json({ error: 'insufficient_credits', balanceUsd: err.balanceUsd });
+    }
     console.error('POST /articles/:id/continue error:', err);
     return res.status(500).json({ error: 'Database error' });
   }

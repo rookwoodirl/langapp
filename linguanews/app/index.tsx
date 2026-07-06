@@ -34,11 +34,13 @@ import { VerbConjugation } from '../types';
 import { useUsageStore } from '../store/usageStore';
 import { ttsService } from '../services/tts';
 import { exportNotecardsToAnki } from '../services/ankiExport';
-import { apiGetNotecardListItems, apiGetCostEvents, CostEvent } from '../services/api';
+import { apiGetNotecardListItems, apiGetCostEvents, CostEvent, apiGetCreditTransactions, CreditTransaction } from '../services/api';
 import { useColors } from '../hooks/useColors';
 import { ThemeColors } from '../constants/theme';
 import { SOURCE_ORDER, SOURCE_LABELS } from '../constants/costs';
 import WheelPicker from '../components/WheelPicker';
+import { useCreditStore } from '../store/creditStore';
+import CreditPacksList from '../components/CreditPacksList';
 
 const WHEEL_YEAR_START = 2020;
 const WHEEL_YEAR_END = new Date().getFullYear() + 1;
@@ -57,7 +59,7 @@ type VocabFilter =
 const SETTINGS_KEY = '@linguanews/settings';
 const CONFIRMED_DEVICE_PAIRS_KEY = '@linguanews/confirmed_device_pairs';
 
-const TABS = ['Translate', 'Articles', 'Vocab', 'Review', 'Cost'] as const;
+const TABS = ['Translate', 'Articles', 'Vocab', 'Review', 'Cost', 'Credits'] as const;
 const COST_TIME_RANGES = [
   { label: '7d', days: 7 },
   { label: '30d', days: 30 },
@@ -116,12 +118,19 @@ export default function HomeScreen() {
   const [costEvents, setCostEvents] = useState<CostEvent[]>([]);
   const [costRangeIndex, setCostRangeIndex] = useState(3); // "All time"
   const [costSourceFilter, setCostSourceFilter] = useState<string | null>(null);
+  const [creditTransactions, setCreditTransactions] = useState<CreditTransaction[]>([]);
+  const creditBalance = useCreditStore((s) => s.balanceUsd);
+  const loadCreditBalance = useCreditStore((s) => s.loadBalance);
 
   async function loadCostEvents() {
     const days = COST_TIME_RANGES[costRangeIndex].days;
     const since = days != null ? new Date(Date.now() - days * 24 * 60 * 60 * 1000) : undefined;
     const events = await apiGetCostEvents({ since, source: costSourceFilter ?? undefined });
     setCostEvents(events);
+  }
+
+  async function loadCreditTransactions() {
+    setCreditTransactions(await apiGetCreditTransactions());
   }
 
   function openCreateList(prefillLanguage?: string) {
@@ -292,6 +301,7 @@ export default function HomeScreen() {
     if (activeTab === 2) loadVocab();
     if (activeTab === 3) { loadLists(); loadChatSessions(); }
     if (activeTab === 4) loadCostEvents();
+    if (activeTab === 5) { loadCreditBalance(); loadCreditTransactions(); }
   }, [activeTab]);
 
   // Refetch cost events when their filters change (while on the Cost tab)
@@ -1068,6 +1078,53 @@ export default function HomeScreen() {
     />
   );
 
+  const creditsPage = (
+    <FlatList
+      style={{ width }}
+      nestedScrollEnabled
+      contentContainerStyle={creditTransactions.length === 0 ? styles.emptyContainer : styles.listContent}
+      data={creditTransactions}
+      keyExtractor={(t) => t.id}
+      ListHeaderComponent={
+        <View>
+          <View style={styles.statsBanner}>
+            <View style={styles.statsTopRow}>
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>${(creditBalance ?? 0).toFixed(2)}</Text>
+                <Text style={styles.statLabel}>balance</Text>
+              </View>
+            </View>
+          </View>
+          <View style={styles.creditPacksSection}>
+            <CreditPacksList />
+          </View>
+          <Text style={styles.creditHistoryHeading}>Recent activity</Text>
+        </View>
+      }
+      ListEmptyComponent={
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyIcon}>💰</Text>
+          <Text style={styles.emptyTitle}>No activity yet</Text>
+          <Text style={styles.emptySubtitle}>Purchases and usage will show up here.</Text>
+        </View>
+      }
+      renderItem={({ item }) => (
+        <View style={styles.costEventCard}>
+          <View style={styles.costEventRow}>
+            <Text style={styles.costEventSource}>
+              {item.type === 'credit_purchase' ? 'Purchase' : item.type === 'credit_starter' ? 'Free credit' : SOURCE_LABELS[item.source ?? ''] ?? 'Usage'}
+            </Text>
+            <Text style={[styles.costEventCost, item.amountUsd < 0 && { color: colors.danger }]}>
+              {item.amountUsd >= 0 ? '+' : ''}${item.amountUsd.toFixed(2)}
+            </Text>
+          </View>
+          <Text style={styles.costEventMeta}>Balance after: ${item.balanceAfterUsd.toFixed(2)}</Text>
+          <Text style={styles.costEventDate}>{formatDate(item.createdAt)}</Text>
+        </View>
+      )}
+    />
+  );
+
   return (
     <SafeAreaView style={styles.safe}>
       {/* Header */}
@@ -1108,6 +1165,7 @@ export default function HomeScreen() {
         {vocabPage}
         {reviewPage}
         {costPage}
+        {creditsPage}
       </ScrollView>
 
       {/* Regen loading overlay */}
@@ -1759,6 +1817,14 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   costEventDescription: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
   costEventMeta: { fontSize: 12, color: colors.textFaint, marginTop: 3 },
   costEventDate: { fontSize: 11, color: colors.textFaint, marginTop: 2 },
+
+  // Credits page
+  creditPacksSection: { paddingHorizontal: 16, paddingTop: 12 },
+  creditHistoryHeading: {
+    fontSize: 13, fontWeight: '700', color: colors.textFaint,
+    textTransform: 'uppercase', letterSpacing: 0.5,
+    paddingHorizontal: 16, paddingTop: 24, paddingBottom: 8,
+  },
 
   // Review page
   reviewMenuCard: {

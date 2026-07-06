@@ -1,8 +1,11 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../db';
 import { callLLM } from '../llmService';
+import { requireAuth } from '../middleware/auth';
+import { InsufficientCreditsError } from '../creditService';
 
 const router = Router();
+router.use(requireAuth);
 
 const MAX_ARTICLE_CONTEXT_CHARS = 8000;
 const MAX_VOCAB_WORDS = 100;
@@ -23,8 +26,8 @@ interface ChatMessageBody {
 }
 
 router.post('/message', async (req: Request, res: Response) => {
+  const userId = req.userId as string;
   const {
-    user_id,
     mode,
     difficulty,
     target_language,
@@ -32,11 +35,12 @@ router.post('/message', async (req: Request, res: Response) => {
     messages,
     article_id,
     vocab_words,
+    vocab_label,
   } = req.body;
 
-  if (!user_id || !mode || !difficulty || !target_language || !native_language || !Array.isArray(messages) || messages.length === 0) {
+  if (!mode || !difficulty || !target_language || !native_language || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({
-      error: 'user_id, mode, difficulty, target_language, native_language, and a non-empty messages array are required',
+      error: 'mode, difficulty, target_language, native_language, and a non-empty messages array are required',
     });
   }
   if (mode !== 'article' && mode !== 'vocab') {
@@ -56,7 +60,7 @@ router.post('/message', async (req: Request, res: Response) => {
       }
       const article = await pool.query(
         `SELECT title FROM articles WHERE id = $1 AND user_id = $2 AND deleted = false`,
-        [article_id, user_id]
+        [article_id, userId]
       );
       if (article.rowCount === 0) {
         return res.status(404).json({ error: 'Article not found for this user' });
@@ -74,6 +78,7 @@ router.post('/message', async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'vocab_words is required for vocab mode' });
       }
       contextBlock = `Vocabulary words to practice: ${words.join(', ')}`;
+      description = (vocab_label as string) || undefined;
     }
 
     const difficultyGuide = DIFFICULTY_GUIDE[difficulty as string];
@@ -95,7 +100,7 @@ router.post('/message', async (req: Request, res: Response) => {
       }));
 
     const result = await callLLM({
-      userId: user_id as string,
+      userId,
       source: 'chat',
       model: 'claude-sonnet-4-6',
       maxTokens: 400,
@@ -108,6 +113,9 @@ router.post('/message', async (req: Request, res: Response) => {
 
     return res.json({ reply: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens });
   } catch (err) {
+    if (err instanceof InsufficientCreditsError) {
+      return res.status(402).json({ error: 'insufficient_credits', balanceUsd: err.balanceUsd });
+    }
     console.error('POST /chat/message error:', err);
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Chat failed' });
   }

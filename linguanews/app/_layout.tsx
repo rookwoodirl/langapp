@@ -4,6 +4,9 @@ import { StatusBar } from 'expo-status-bar';
 import { useThemeStore } from '../store/themeStore';
 import { useColors } from '../hooks/useColors';
 import { getAuthState } from '../services/auth';
+import { initPurchases } from '../services/purchases';
+import { useCreditStore } from '../store/creditStore';
+import { PaywallModal } from '../components/PaywallModal';
 
 export default function RootLayout() {
   const { load } = useThemeStore();
@@ -19,6 +22,10 @@ export default function RootLayout() {
     getAuthState().then((state) => {
       setIsAuthed(!!state);
       setAuthChecked(true);
+      if (state) {
+        initPurchases(state.userId);
+        useCreditStore.getState().loadBalance();
+      }
     });
   }, []);
 
@@ -46,6 +53,7 @@ export default function RootLayout() {
         <Stack.Screen name="chat-setup" options={{ title: 'New Chat', presentation: 'modal' }} />
         <Stack.Screen name="chat/[id]" options={{ title: 'Chat' }} />
       </Stack>
+      <PaywallModal />
     </>
   );
 }

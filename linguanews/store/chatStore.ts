@@ -79,6 +79,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       messages: session.messages.map((m) => ({ role: m.role, content: m.content })),
       articleId: session.articleId,
       vocabWords: session.vocabWords,
+      vocabLabel: session.vocabLabel,
     });
 
     const assistantMsg: ChatMessage = { role: 'assistant', content: result.reply, timestamp: Date.now() };

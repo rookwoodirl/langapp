@@ -1,13 +1,25 @@
 import { Router, Request, Response } from 'express';
 import { callLLM } from '../llmService';
 import { lookupWiktionary } from '../wiktionary';
+import { requireAuth } from '../middleware/auth';
+import { InsufficientCreditsError } from '../creditService';
 
 const router = Router();
+router.use(requireAuth);
 
 const GENDERED_LANGUAGES = new Set(['de', 'fr', 'es', 'it', 'pt', 'nl', 'sv', 'no', 'da', 'pl', 'ru', 'ar', 'he', 'hi']);
 
-const ROMANCE_LANGUAGE_CODES = new Set(['es', 'fr', 'it', 'pt']);
-const ROMANCE_TENSES = ['Present', 'Imperfect', 'Preterite', 'Subjunctive', 'Future', 'Present Perfect', 'Present Progressive'];
+// Explicit, fixed tense/mood sets per language so every verb in that language
+// gets the same conjugation table shape — without this, the model is free to
+// pick "the most important tenses" per call, which produces inconsistent
+// results between verbs (e.g. one gets an Imperative table, another doesn't).
+const FIXED_TENSE_LANGUAGES: Record<string, string[]> = {
+  es: ['Present', 'Imperfect', 'Preterite', 'Subjunctive', 'Future', 'Present Perfect', 'Present Progressive'],
+  fr: ['Present', 'Imperfect', 'Preterite', 'Subjunctive', 'Future', 'Present Perfect', 'Present Progressive'],
+  it: ['Present', 'Imperfect', 'Preterite', 'Subjunctive', 'Future', 'Present Perfect', 'Present Progressive'],
+  pt: ['Present', 'Imperfect', 'Preterite', 'Subjunctive', 'Future', 'Present Perfect', 'Present Progressive'],
+  de: ['Present', 'Simple Past', 'Perfect', 'Future', 'Imperative', 'Subjunctive II'],
+};
 
 function extractContext(text: string, word: string, radius = 400): string {
   const idx = text.toLowerCase().indexOf(word.toLowerCase());
@@ -19,10 +31,11 @@ function extractContext(text: string, word: string, radius = 400): string {
 
 // Word definition lookup — Wiktionary first (when nativeLanguage === 'en'), fallback to Sonnet
 router.post('/lookup', async (req: Request, res: Response) => {
-  const { user_id, word, target_language, native_language, article_context } = req.body;
+  const userId = req.userId as string;
+  const { word, target_language, native_language, article_context } = req.body;
 
-  if (!user_id || !word || !target_language || !native_language) {
-    return res.status(400).json({ error: 'user_id, word, target_language, and native_language are required' });
+  if (!word || !target_language || !native_language) {
+    return res.status(400).json({ error: 'word, target_language, and native_language are required' });
   }
 
   try {
@@ -66,7 +79,7 @@ router.post('/lookup', async (req: Request, res: Response) => {
       `Respond with raw JSON only. No markdown, no code fences, no preamble.`;
 
     const result = await callLLM({
-      userId: user_id as string,
+      userId,
       source: 'vocab',
       model: 'claude-sonnet-4-6',
       maxTokens: 256,
@@ -102,6 +115,9 @@ router.post('/lookup', async (req: Request, res: Response) => {
 
     return res.json({ definition, partOfSpeech, gender, article, infinitive, inputTokens: result.inputTokens, outputTokens: result.outputTokens });
   } catch (err) {
+    if (err instanceof InsufficientCreditsError) {
+      return res.status(402).json({ error: 'insufficient_credits', balanceUsd: err.balanceUsd });
+    }
     console.error('POST /llm/lookup error:', err);
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Lookup failed' });
   }
@@ -109,10 +125,11 @@ router.post('/lookup', async (req: Request, res: Response) => {
 
 // Vocab word selection — returns a list of recommended words from article text
 router.post('/vocab-select', async (req: Request, res: Response) => {
-  const { user_id, text, target_language, native_language, existing_words } = req.body;
+  const userId = req.userId as string;
+  const { text, target_language, native_language, existing_words } = req.body;
 
-  if (!user_id || !text || !target_language || !native_language) {
-    return res.status(400).json({ error: 'user_id, text, target_language, and native_language are required' });
+  if (!text || !target_language || !native_language) {
+    return res.status(400).json({ error: 'text, target_language, and native_language are required' });
   }
 
   const existing: string[] = Array.isArray(existing_words) ? existing_words : [];
@@ -122,7 +139,7 @@ router.post('/vocab-select', async (req: Request, res: Response) => {
 
   try {
     const result = await callLLM({
-      userId: user_id as string,
+      userId,
       source: 'vocab_selection',
       model: 'claude-haiku-4-5-20251001',
       maxTokens: 256,
@@ -153,6 +170,9 @@ router.post('/vocab-select', async (req: Request, res: Response) => {
 
     return res.json({ words, inputTokens: result.inputTokens, outputTokens: result.outputTokens });
   } catch (err) {
+    if (err instanceof InsufficientCreditsError) {
+      return res.status(402).json({ error: 'insufficient_credits', balanceUsd: err.balanceUsd });
+    }
     console.error('POST /llm/vocab-select error:', err);
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Vocab selection failed' });
   }
@@ -160,21 +180,22 @@ router.post('/vocab-select', async (req: Request, res: Response) => {
 
 // Verb conjugation
 router.post('/conjugate', async (req: Request, res: Response) => {
-  const { user_id, verb, language } = req.body;
+  const userId = req.userId as string;
+  const { verb, language } = req.body;
 
-  if (!user_id || !verb || !language) {
-    return res.status(400).json({ error: 'user_id, verb, and language are required' });
+  if (!verb || !language) {
+    return res.status(400).json({ error: 'verb and language are required' });
   }
 
   try {
-    const isRomance = ROMANCE_LANGUAGE_CODES.has(language as string);
-    const tenseInstruction = isRomance
-      ? `Include exactly these tenses (skip any that genuinely do not exist in ${language}): ${ROMANCE_TENSES.join(', ')}. ` +
-        `The "name" field must be EXACTLY one of: ${ROMANCE_TENSES.join(', ')}.`
-      : `Include the most important tenses for ${language}. Use standard English names for tense headers (e.g. Present, Past, Future).`;
+    const fixedTenses = FIXED_TENSE_LANGUAGES[language as string];
+    const tenseInstruction = fixedTenses
+      ? `Include exactly these tenses/moods (skip any that genuinely do not exist in ${language}): ${fixedTenses.join(', ')}. ` +
+        `The "name" field must be EXACTLY one of: ${fixedTenses.join(', ')}.`
+      : `Include the most important tenses for ${language}. Always use the same standard set of tenses for every verb in ${language}, so conjugation tables are consistent across different words. Use standard English names for tense headers (e.g. Present, Past, Future).`;
 
     const result = await callLLM({
-      userId: user_id as string,
+      userId,
       source: 'vocab',
       model: 'claude-haiku-4-5-20251001',
       maxTokens: 800,
@@ -202,6 +223,9 @@ router.post('/conjugate', async (req: Request, res: Response) => {
     const conjugation = JSON.parse(raw.slice(start, end + 1));
     return res.json({ conjugation, inputTokens: result.inputTokens, outputTokens: result.outputTokens });
   } catch (err) {
+    if (err instanceof InsufficientCreditsError) {
+      return res.status(402).json({ error: 'insufficient_credits', balanceUsd: err.balanceUsd });
+    }
     console.error('POST /llm/conjugate error:', err);
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Conjugation failed' });
   }

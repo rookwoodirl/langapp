@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { pool } from './db';
+import { checkBalance, chargeUsage, InsufficientCreditsError, CREDIT_MARGIN } from './creditService';
 
 const DIFFICULTY_INSTRUCTIONS: Record<string, string> = {
   beginner:
@@ -18,6 +19,8 @@ const INPUT_RATE = 3.0 / 1_000_000;
 const OUTPUT_RATE = 15.0 / 1_000_000;
 const MODEL = 'claude-sonnet-4-6';
 const CHUNK_SIZE = 40_000;
+
+const OUT_OF_CREDITS_MESSAGE = 'Out of credits — buy more credits, then tap Continue to keep translating.';
 
 function buildSystem(sourceLanguage: string, targetLanguage: string, difficulty: string, nativeLanguage: string, includeTitle: boolean): string {
   const difficultyNote = DIFFICULTY_INSTRUCTIONS[difficulty] ?? DIFFICULTY_INSTRUCTIONS.intermediate;
@@ -76,6 +79,28 @@ async function processLine(
   }
 }
 
+// Records cost/credit-debit for a single chunk. Recording per-chunk (rather
+// than once at the end of a possibly multi-chunk job) bounds how much a
+// balance can go unrecorded if the process crashes mid-job, and lets the
+// $1-minimum gate actually cut off a long article partway through instead of
+// only checking once before an unboundedly expensive job starts.
+async function recordChunkCost(
+  userId: string,
+  targetLanguage: string,
+  articleId: string,
+  inputTokens: number,
+  outputTokens: number,
+  description?: string,
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO api_costs (user_id, source, model, language, input_credit_rate, total_input_credits, output_credit_rate, total_output_credits, description, article_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [userId, 'article', MODEL, targetLanguage, INPUT_RATE, inputTokens, OUTPUT_RATE, outputTokens, description ?? null, articleId],
+  );
+  const costUsd = inputTokens * INPUT_RATE + outputTokens * OUTPUT_RATE;
+  await chargeUsage(userId, 'translate', costUsd * CREDIT_MARGIN, articleId);
+}
+
 export async function runContinuationJob(
   articleId: string,
   userId: string,
@@ -108,9 +133,24 @@ export async function runContinuationJob(
   }
 
   try {
-    for (const chunk of chunks) {
+    let insufficientAt: number | null = null;
+
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+      try {
+        await checkBalance(userId);
+      } catch (err) {
+        if (err instanceof InsufficientCreditsError) {
+          insufficientAt = chunkIndex;
+          break;
+        }
+        throw err;
+      }
+
+      const chunk = chunks[chunkIndex];
       const system = buildSystem(sourceLanguage, targetLanguage, difficulty, nativeLanguage, false);
       let buffer = '';
+      let chunkInputTokens = 0;
+      let chunkOutputTokens = 0;
 
       const stream = await client.messages.create({
         model: MODEL,
@@ -122,7 +162,7 @@ export async function runContinuationJob(
 
       for await (const event of stream) {
         if (event.type === 'message_start') {
-          totalInputTokens += event.message.usage?.input_tokens ?? 0;
+          chunkInputTokens += event.message.usage?.input_tokens ?? 0;
         }
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
           buffer += event.delta.text;
@@ -134,20 +174,30 @@ export async function runContinuationJob(
           }
         }
         if (event.type === 'message_delta') {
-          totalOutputTokens += event.usage?.output_tokens ?? 0;
+          chunkOutputTokens += event.usage?.output_tokens ?? 0;
         }
       }
 
       if (buffer.trim()) {
         await processLine(buffer, articleId, rowOrderRef, resolvedTitleRef, sourceLanguage, targetLanguage);
       }
+
+      totalInputTokens += chunkInputTokens;
+      totalOutputTokens += chunkOutputTokens;
+      await recordChunkCost(userId, targetLanguage, articleId, chunkInputTokens, chunkOutputTokens);
     }
 
-    await pool.query(
-      `INSERT INTO api_costs (user_id, source, model, language, input_credit_rate, total_input_credits, output_credit_rate, total_output_credits, article_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [userId, 'article', MODEL, targetLanguage, INPUT_RATE, totalInputTokens, OUTPUT_RATE, totalOutputTokens, articleId],
-    );
+    if (insufficientAt !== null) {
+      const remaining = chunks.slice(insufficientAt).join('');
+      await pool.query(
+        `UPDATE articles
+         SET status = 'error', status_message = $1, remaining_text = $2,
+             input_tokens = input_tokens + $3, output_tokens = output_tokens + $4
+         WHERE id = $5`,
+        [OUT_OF_CREDITS_MESSAGE, remaining, totalInputTokens, totalOutputTokens, articleId],
+      );
+      return;
+    }
 
     await pool.query(
       `UPDATE articles
@@ -203,13 +253,27 @@ export async function runTranslationJob(
   }
 
   try {
+    let insufficientAt: number | null = null;
+
     for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+      try {
+        await checkBalance(userId);
+      } catch (err) {
+        if (err instanceof InsufficientCreditsError) {
+          insufficientAt = chunkIndex;
+          break;
+        }
+        throw err;
+      }
+
       const chunk = chunks[chunkIndex];
       // Ask for title only on first chunk, and only if we don't have one yet
       const includeTitle = chunkIndex === 0 && resolvedTitleRef.value === null;
       const system = buildSystem(sourceLanguage, targetLanguage, difficulty, nativeLanguage, includeTitle);
 
       let buffer = '';
+      let chunkInputTokens = 0;
+      let chunkOutputTokens = 0;
 
       const stream = await client.messages.create({
         model: MODEL,
@@ -221,7 +285,7 @@ export async function runTranslationJob(
 
       for await (const event of stream) {
         if (event.type === 'message_start') {
-          totalInputTokens += event.message.usage?.input_tokens ?? 0;
+          chunkInputTokens += event.message.usage?.input_tokens ?? 0;
         }
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
           buffer += event.delta.text;
@@ -233,7 +297,7 @@ export async function runTranslationJob(
           }
         }
         if (event.type === 'message_delta') {
-          totalOutputTokens += event.usage?.output_tokens ?? 0;
+          chunkOutputTokens += event.usage?.output_tokens ?? 0;
         }
       }
 
@@ -241,15 +305,23 @@ export async function runTranslationJob(
       if (buffer.trim()) {
         await processLine(buffer, articleId, rowOrderRef, resolvedTitleRef, sourceLanguage, targetLanguage);
       }
+
+      totalInputTokens += chunkInputTokens;
+      totalOutputTokens += chunkOutputTokens;
+      await recordChunkCost(userId, targetLanguage, articleId, chunkInputTokens, chunkOutputTokens, resolvedTitleRef.value ?? undefined);
     }
 
-    const finalTitle = resolvedTitleRef.value;
-
-    await pool.query(
-      `INSERT INTO api_costs (user_id, source, model, language, input_credit_rate, total_input_credits, output_credit_rate, total_output_credits, description, article_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [userId, 'article', MODEL, targetLanguage, INPUT_RATE, totalInputTokens, OUTPUT_RATE, totalOutputTokens, finalTitle, articleId],
-    );
+    if (insufficientAt !== null) {
+      const remaining = chunks.slice(insufficientAt).join('');
+      await pool.query(
+        `UPDATE articles
+         SET status = 'error', status_message = $1, remaining_text = $2,
+             input_tokens = $3, output_tokens = $4
+         WHERE id = $5`,
+        [OUT_OF_CREDITS_MESSAGE, remaining, totalInputTokens, totalOutputTokens, articleId],
+      );
+      return;
+    }
 
     await pool.query(
       `UPDATE articles SET status = 'complete', input_tokens = $1, output_tokens = $2 WHERE id = $3`,
