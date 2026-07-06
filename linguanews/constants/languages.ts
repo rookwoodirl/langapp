@@ -1,3 +1,5 @@
+import { DifficultyLevel } from '../types';
+
 export interface Language {
   code: string;
   name: string;
@@ -27,6 +29,8 @@ export const DEFAULT_SOURCE_LANGUAGE = 'en';
 export const DEFAULT_TARGET_LANGUAGE = 'es';
 export const DEFAULT_NATIVE_LANGUAGE = 'en';
 
+export const DIFFICULTIES: DifficultyLevel[] = ['beginner', 'intermediate', 'advanced'];
+
 // Languages with grammatical gender (and, accordingly, gendered definite articles).
 // Used to skip asking for gender/article on languages that don't have the concept (e.g. Chinese, Japanese, Korean, Turkish).
 export const GENDERED_LANGUAGES = new Set(['es', 'fr', 'de', 'it', 'pt', 'nl', 'ru', 'ar', 'hi', 'pl', 'sv']);
@@ -37,4 +41,11 @@ export function isGenderedLanguage(code: string): boolean {
 
 export function getLanguageName(code: string): string {
   return LANGUAGES.find((l) => l.code === code)?.name ?? code;
+}
+
+// An article has two languages (source and target). Whichever one isn't the
+// user's native/preferred language is the one being learned — don't assume
+// that's always `targetLanguage`, since a translation can run either direction.
+export function getLearningLanguage(sourceLanguage: string, targetLanguage: string, nativeLanguage: string): string {
+  return targetLanguage === nativeLanguage ? sourceLanguage : targetLanguage;
 }

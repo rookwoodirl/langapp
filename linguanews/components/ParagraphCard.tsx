@@ -20,7 +20,7 @@ interface Props {
   cardWidth: number;
   language: string;
   sourceLanguage?: string;
-  onWordTap: (word: string, definition?: string, partOfSpeech?: string) => void;
+  onWordTap: (word: string, language: string, definition?: string, partOfSpeech?: string) => void;
 }
 
 // Chinese has no whitespace between words, so a non-vocab segment is otherwise
@@ -228,15 +228,15 @@ export default function ParagraphCard({ pair, vocabList, cardWidth, language, so
   function commitPhrase() {
     const phrase = buildPhrase();
     exitPhraseMode();
-    if (phrase.trim()) onWordTap(phrase);
+    if (phrase.trim()) onWordTap(phrase, language);
   }
 
   function handleTokenPress(token: Token) {
     if (live.current.phraseMode) return;
     if (token.isVocab) {
-      onWordTap(token.display, token.vocab?.definition, token.vocab?.partOfSpeech);
+      onWordTap(token.display, language, token.vocab?.definition, token.vocab?.partOfSpeech);
     } else if (token.lookup) {
-      onWordTap(token.lookup);
+      onWordTap(token.lookup, language);
     }
   }
 
@@ -299,7 +299,7 @@ export default function ParagraphCard({ pair, vocabList, cardWidth, language, so
                   <Text
                     key={token.key}
                     style={[styles.tokenBase, styles.plainWord]}
-                    onPress={() => token.lookup && onWordTap(token.lookup)}
+                    onPress={() => token.lookup && onWordTap(token.lookup, sourceLanguage ?? language)}
                     suppressHighlighting
                   >
                     {token.display}

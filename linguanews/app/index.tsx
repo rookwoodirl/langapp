@@ -22,10 +22,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useArticle } from '../hooks/useArticle';
 import LanguagePicker from '../components/LanguagePicker';
 import { UserSettings, Article, UserVocabWord, DifficultyLevel, NotecardList } from '../types';
-import { DEFAULT_SOURCE_LANGUAGE, DEFAULT_TARGET_LANGUAGE, DEFAULT_NATIVE_LANGUAGE, getLanguageName } from '../constants/languages';
+import { DEFAULT_SOURCE_LANGUAGE, DEFAULT_TARGET_LANGUAGE, DEFAULT_NATIVE_LANGUAGE, DIFFICULTIES, getLanguageName, getLearningLanguage } from '../constants/languages';
 import { useArticleStore } from '../store/articleStore';
 import { useVocabStore } from '../store/vocabStore';
 import { useNotecardStore } from '../store/notecardStore';
+import { useChatStore } from '../store/chatStore';
 import { calcCost, formatCost, formatTokens } from '../utils/cost';
 import { selectVocabWords, lookupWordDefinition, getVerbConjugation } from '../services/vocab';
 import ConjugationModal from '../components/ConjugationModal';
@@ -37,8 +38,21 @@ import { apiGetNotecardListItems, apiGetCostEvents, CostEvent } from '../service
 import { useColors } from '../hooks/useColors';
 import { ThemeColors } from '../constants/theme';
 import { SOURCE_ORDER, SOURCE_LABELS } from '../constants/costs';
+import WheelPicker from '../components/WheelPicker';
 
-const DIFFICULTIES: DifficultyLevel[] = ['beginner', 'intermediate', 'advanced'];
+const WHEEL_YEAR_START = 2020;
+const WHEEL_YEAR_END = new Date().getFullYear() + 1;
+const WHEEL_YEAR_ITEMS = Array.from(
+  { length: WHEEL_YEAR_END - WHEEL_YEAR_START + 1 },
+  (_, i) => String(WHEEL_YEAR_START + i)
+);
+const WHEEL_MONTH_ITEMS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+type VocabFilter =
+  | { type: 'language'; value: string }
+  | { type: 'contains'; value: string }
+  | { type: 'before'; value: string }
+  | { type: 'after'; value: string };
 
 const SETTINGS_KEY = '@linguanews/settings';
 const CONFIRMED_DEVICE_PAIRS_KEY = '@linguanews/confirmed_device_pairs';
@@ -72,6 +86,8 @@ export default function HomeScreen() {
   const { savedArticles, loadSavedArticles, setCurrentArticle, deleteArticle } = useArticleStore();
   const { words: vocabWords, loadVocab, removeWord, addWord, updateWord } = useVocabStore();
   const { lists, loadLists, createList, updateList, deleteList, addToList, loadListItems, currentListItems } = useNotecardStore();
+  const { sessions: chatSessions, load: loadChatSessions, deleteSession } = useChatStore();
+  const [reviewSection, setReviewSection] = useState<'menu' | 'srs'>('menu');
 
   const { load: loadUsage } = useUsageStore();
 
@@ -79,8 +95,13 @@ export default function HomeScreen() {
   const [contextMenu, setContextMenu] = useState<Article | null>(null);
   const [regenLoading, setRegenLoading] = useState(false);
   const [conjModal, setConjModal] = useState<{ infinitive: string; conjugation: VerbConjugation } | null>(null);
-  const [vocabLangFilter, setVocabLangFilter] = useState<string | null>(null);
-  const [vocabSearch, setVocabSearch] = useState('');
+  const [vocabFilters, setVocabFilters] = useState<VocabFilter[]>([]);
+  const [showVocabFilters, setShowVocabFilters] = useState(false);
+  const [filterModalPage, setFilterModalPage] = useState<'list' | 'pick' | VocabFilter['type']>('list');
+  const [filterInputValue, setFilterInputValue] = useState('');
+  const [filterYear, setFilterYear] = useState(() => new Date().getFullYear());
+  const [filterMonth, setFilterMonth] = useState(() => new Date().getMonth() + 1);
+  const [filterDay, setFilterDay] = useState(() => new Date().getDate());
   const [editingWord, setEditingWord] = useState<UserVocabWord | null>(null);
   const [editForm, setEditForm] = useState({ word: '', definition: '', partOfSpeech: '', gender: '', article: '' });
   const [savingEdit, setSavingEdit] = useState(false);
@@ -177,6 +198,47 @@ export default function HomeScreen() {
     }
   }
 
+  function addVocabFilter(filter: VocabFilter) {
+    setVocabFilters((prev) => {
+      if (filter.type === 'contains') return [...prev, filter];
+      return [...prev.filter((f) => f.type !== filter.type), filter];
+    });
+  }
+
+  function removeVocabFilter(index: number) {
+    setVocabFilters((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function vocabFilterLabel(f: VocabFilter): string {
+    if (f.type === 'language') return `Language: ${getLanguageName(f.value)}`;
+    if (f.type === 'contains') return `Contains: "${f.value}"`;
+    if (f.type === 'before') return `Before: ${f.value}`;
+    if (f.type === 'after') return `After: ${f.value}`;
+    return '';
+  }
+
+  function filterTypeLabel(type: VocabFilter['type']): string {
+    switch (type) {
+      case 'language': return 'Language';
+      case 'contains': return 'Contains keyword';
+      case 'before': return 'Added before date';
+      case 'after': return 'Added after date';
+    }
+  }
+
+  function handleAddCurrentFilter() {
+    const type = filterModalPage as VocabFilter['type'];
+    if (type === 'contains') {
+      if (!filterInputValue.trim()) return;
+      addVocabFilter({ type: 'contains', value: filterInputValue.trim() });
+      setFilterInputValue('');
+    } else if (type === 'before' || type === 'after') {
+      const dateStr = `${filterYear}-${String(filterMonth).padStart(2, '0')}-${String(filterDay).padStart(2, '0')}`;
+      addVocabFilter({ type, value: dateStr });
+    }
+    setFilterModalPage('list');
+  }
+
   function openEditModal(word: UserVocabWord) {
     setEditingWord(word);
     setEditForm({
@@ -228,7 +290,7 @@ export default function HomeScreen() {
   useEffect(() => {
     if (activeTab === 1) loadSavedArticles();
     if (activeTab === 2) loadVocab();
-    if (activeTab === 3) loadLists();
+    if (activeTab === 3) { loadLists(); loadChatSessions(); }
     if (activeTab === 4) loadCostEvents();
   }, [activeTab]);
 
@@ -320,18 +382,24 @@ export default function HomeScreen() {
     setRegenLoading(true);
     try {
       const existing = vocabWords.map((w) => w.word);
-      const articleText = article.sentencePairs.map((p) => p.translation).join(' ');
+      const nativeLanguage = settings.nativeLanguage ?? 'en';
+      const learningLanguage = getLearningLanguage(article.sourceLanguage, article.targetLanguage, nativeLanguage);
+      const articleText = (
+        learningLanguage === article.sourceLanguage
+          ? article.sentencePairs.map((p) => p.original)
+          : article.sentencePairs.map((p) => p.translation)
+      ).join(' ');
 
       // Step 1: pick words (cheap selection call)
       const selection = await selectVocabWords(
-        articleText, article.targetLanguage, settings.nativeLanguage ?? 'en', existing
+        articleText, learningLanguage, nativeLanguage, existing
       );
       useUsageStore.getState().addVocab(selection.inputTokens, selection.outputTokens);
 
       // Step 2: look up each word through the same pipeline as word taps
       const lookups = await Promise.all(
         selection.words.map((word) =>
-          lookupWordDefinition(word, article.targetLanguage, settings.nativeLanguage ?? 'en', articleText)
+          lookupWordDefinition(word, learningLanguage, nativeLanguage, articleText)
         )
       );
       useUsageStore.getState().addVocab(
@@ -345,7 +413,7 @@ export default function HomeScreen() {
           const isVerb = lookup.partOfSpeech?.toLowerCase().includes('verb');
           const wordCandidate = lookup.infinitive ?? selection.words[i];
           const conjugation = isVerb
-            ? (await getVerbConjugation(wordCandidate, article.targetLanguage)) ?? undefined
+            ? (await getVerbConjugation(wordCandidate, learningLanguage)) ?? undefined
             : undefined;
           // Mirror tap flow: conjugation.infinitive takes priority, then lookup.infinitive, then selected word
           const saveWord = conjugation?.infinitive ?? lookup.infinitive ?? selection.words[i];
@@ -357,7 +425,7 @@ export default function HomeScreen() {
         enriched.map(({ lookup, saveWord, conjugation }) =>
           addWord({
             word: saveWord,
-            language: article.targetLanguage,
+            language: learningLanguage,
             definition: lookup.definition,
             partOfSpeech: lookup.partOfSpeech,
             gender: lookup.gender,
@@ -594,10 +662,32 @@ export default function HomeScreen() {
 
   // ── Vocab page ──────────────────────────────────────────────────────────────
   const vocabLanguages = Array.from(new Set(vocabWords.map((w) => w.language)));
-  const searchTerm = vocabSearch.trim().toLowerCase();
-  const filteredVocabWords = vocabWords
-    .filter((w) => !vocabLangFilter || w.language === vocabLangFilter)
-    .filter((w) => !searchTerm || w.word.toLowerCase().includes(searchTerm) || w.definition.toLowerCase().includes(searchTerm));
+  const daysInMonth = new Date(filterYear, filterMonth, 0).getDate();
+  const dayItems = useMemo(
+    () => Array.from({ length: daysInMonth }, (_, i) => String(i + 1).padStart(2, '0')),
+    [daysInMonth]
+  );
+  useEffect(() => {
+    setFilterDay((d) => Math.min(d, daysInMonth));
+  }, [daysInMonth]);
+  const filteredVocabWords = vocabWords.filter((w) => {
+    for (const f of vocabFilters) {
+      if (f.type === 'language' && w.language !== f.value) return false;
+      if (f.type === 'contains') {
+        const term = f.value.toLowerCase();
+        if (!w.word.toLowerCase().includes(term) && !w.definition.toLowerCase().includes(term)) return false;
+      }
+      if (f.type === 'before') {
+        const cutoff = new Date(f.value).getTime();
+        if (w.addedAt >= cutoff) return false;
+      }
+      if (f.type === 'after') {
+        const cutoff = new Date(f.value).getTime();
+        if (w.addedAt <= cutoff) return false;
+      }
+    }
+    return true;
+  });
 
   const vocabPage = (
     <FlatList
@@ -608,42 +698,38 @@ export default function HomeScreen() {
       keyExtractor={(w) => w.id}
       ListHeaderComponent={
         <View>
-          {vocabWords.length > 0 && (
-            <TextInput
-              style={styles.vocabSearchInput}
-              placeholder="Search words or definitions…"
-              placeholderTextColor={colors.textFaint}
-              value={vocabSearch}
-              onChangeText={setVocabSearch}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-          )}
-          {vocabLanguages.length > 1 && (
+          {vocabFilters.length > 0 && (
             <View style={styles.langFilterRow}>
-              <TouchableOpacity
-                style={[styles.langFilterChip, !vocabLangFilter && styles.langFilterChipActive]}
-                onPress={() => setVocabLangFilter(null)}
-              >
-                <Text style={[styles.langFilterText, !vocabLangFilter && styles.langFilterTextActive]}>All</Text>
-              </TouchableOpacity>
-              {vocabLanguages.map((lang) => (
+              {vocabFilters.map((f, i) => (
                 <TouchableOpacity
-                  key={lang}
-                  style={[styles.langFilterChip, vocabLangFilter === lang && styles.langFilterChipActive]}
-                  onPress={() => setVocabLangFilter(lang)}
+                  key={i}
+                  style={[styles.langFilterChip, styles.langFilterChipActive]}
+                  onPress={() => removeVocabFilter(i)}
                 >
-                  <Text style={[styles.langFilterText, vocabLangFilter === lang && styles.langFilterTextActive]}>
-                    {getLanguageName(lang)}
+                  <Text style={[styles.langFilterText, styles.langFilterTextActive]}>
+                    {vocabFilterLabel(f)} ×
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
           )}
-          {filteredVocabWords.length > 0 && (
-            <TouchableOpacity style={styles.exportBtn} onPress={() => handleExportToAnki(filteredVocabWords)}>
-              <Text style={styles.exportBtnText}>Export to Anki ({filteredVocabWords.length})</Text>
-            </TouchableOpacity>
+          {vocabWords.length > 0 && (
+            <View style={styles.vocabActionRow}>
+              <TouchableOpacity
+                style={[styles.exportBtn, { flex: 1 }]}
+                onPress={() => handleExportToAnki(filteredVocabWords)}
+              >
+                <Text style={styles.exportBtnText}>Export to Anki ({filteredVocabWords.length})</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.exportBtn, styles.filtersBtn]}
+                onPress={() => setShowVocabFilters(true)}
+              >
+                <Text style={styles.exportBtnText}>
+                  Filters{vocabFilters.length > 0 ? ` (${vocabFilters.length})` : ''}
+                </Text>
+              </TouchableOpacity>
+            </View>
           )}
         </View>
       }
@@ -656,7 +742,7 @@ export default function HomeScreen() {
           <Text style={styles.emptySubtitle}>
             {vocabWords.length === 0
               ? 'Tap any highlighted word while reading and hit "Add to vocab".'
-              : 'Try a different search term or language filter.'}
+              : 'Try adjusting or removing your filters.'}
           </Text>
         </View>
       }
@@ -706,7 +792,78 @@ export default function HomeScreen() {
   );
 
   // ── Review page ─────────────────────────────────────────────────────────────
-  const reviewPage = (
+  const reviewMenuPage = (
+    <ScrollView style={{ width }} nestedScrollEnabled contentContainerStyle={styles.listContent}>
+      <TouchableOpacity
+        style={styles.reviewMenuCard}
+        onPress={() => setReviewSection('srs')}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.reviewMenuIcon}>🧠</Text>
+        <View style={styles.reviewMenuTextCol}>
+          <Text style={styles.reviewMenuTitle}>Spaced Repetition</Text>
+          <Text style={styles.reviewMenuSubtitle}>Review due flashcards from your saved vocab.</Text>
+        </View>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.reviewMenuCard}
+        onPress={() => router.push({ pathname: '/chat-setup', params: { mode: 'article' } })}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.reviewMenuIcon}>💬</Text>
+        <View style={styles.reviewMenuTextCol}>
+          <Text style={styles.reviewMenuTitle}>Chat about Article</Text>
+          <Text style={styles.reviewMenuSubtitle}>Discuss one of your saved articles with an AI partner.</Text>
+        </View>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.reviewMenuCard}
+        onPress={() => router.push({ pathname: '/chat-setup', params: { mode: 'vocab' } })}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.reviewMenuIcon}>📚</Text>
+        <View style={styles.reviewMenuTextCol}>
+          <Text style={styles.reviewMenuTitle}>Chat through Vocab</Text>
+          <Text style={styles.reviewMenuSubtitle}>Practice a conversation built around a vocab list.</Text>
+        </View>
+      </TouchableOpacity>
+
+      {chatSessions.length > 0 && (
+        <>
+          <Text style={styles.cardLabel}>Recent chats</Text>
+          {chatSessions.map((session) => (
+            <TouchableOpacity
+              key={session.id}
+              style={styles.vocabCard}
+              onPress={() => router.push(`/chat/${session.id}`)}
+              activeOpacity={0.8}
+            >
+              <View style={styles.vocabHeader}>
+                <View style={styles.vocabWordRow}>
+                  <Text style={styles.vocabWord}>
+                    {session.mode === 'article' ? (session.articleTitle ?? 'Article chat') : (session.vocabLabel ?? 'Vocab chat')}
+                  </Text>
+                </View>
+                <View style={styles.vocabCardActions}>
+                  <TouchableOpacity onPress={() => deleteSession(session.id)} hitSlop={8}>
+                    <Text style={styles.vocabRemove}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+              <Text style={styles.vocabDefinition}>
+                {session.difficulty.charAt(0).toUpperCase() + session.difficulty.slice(1)}
+                {session.messages.length > 0 ? ` · ${session.messages[session.messages.length - 1].content.slice(0, 60)}` : ' · No messages yet'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </>
+      )}
+    </ScrollView>
+  );
+
+  const reviewSrsPage = (
     <FlatList
       style={{ width }}
       nestedScrollEnabled
@@ -715,6 +872,9 @@ export default function HomeScreen() {
       keyExtractor={(l) => l.id}
       ListHeaderComponent={
         <View>
+          <TouchableOpacity style={styles.reviewBackBtn} onPress={() => setReviewSection('menu')}>
+            <Text style={styles.reviewBackText}>‹ Review options</Text>
+          </TouchableOpacity>
           <TouchableOpacity
             style={styles.reviewCta}
             onPress={() => router.push({ pathname: '/review', params: reviewLangFilter ? { language: reviewLangFilter } : {} })}
@@ -784,6 +944,8 @@ export default function HomeScreen() {
       }
     />
   );
+
+  const reviewPage = reviewSection === 'menu' ? reviewMenuPage : reviewSrsPage;
 
   // ── Cost page ───────────────────────────────────────────────────────────────
   // Aggregate article events by articleId so each article = 1 row.
@@ -1219,6 +1381,171 @@ export default function HomeScreen() {
           </View>
         </View>
       </Modal>
+      {/* Vocab filters modal */}
+      <Modal
+        visible={showVocabFilters}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowVocabFilters(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => { setShowVocabFilters(false); setFilterModalPage('list'); }} />
+        <View style={styles.filtersSheet}>
+          <View style={styles.modalHandle} />
+
+          {/* Page: filter list */}
+          {filterModalPage === 'list' && (
+            <>
+              <View style={styles.filtersSheetHeader}>
+                <Text style={[styles.modalTitle, { marginBottom: 0 }]}>Filters</Text>
+                <TouchableOpacity onPress={() => { setShowVocabFilters(false); setFilterModalPage('list'); }}>
+                  <Text style={styles.filterDoneText}>Done</Text>
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+                {vocabFilters.length === 0 ? (
+                  <Text style={styles.filterEmptyText}>No filters active</Text>
+                ) : (
+                  vocabFilters.map((f, i) => (
+                    <View key={i} style={styles.filterRow}>
+                      <Text style={styles.filterRowText}>{vocabFilterLabel(f)}</Text>
+                      <TouchableOpacity onPress={() => removeVocabFilter(i)} hitSlop={8}>
+                        <Text style={styles.filterRowRemove}>×</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))
+                )}
+              </ScrollView>
+              <TouchableOpacity
+                style={styles.filterAddFilterBtn}
+                onPress={() => { setFilterInputValue(''); setFilterModalPage('pick'); }}
+              >
+                <Text style={styles.filterAddFilterBtnText}>+ Add filter</Text>
+              </TouchableOpacity>
+              {vocabFilters.length > 0 && (
+                <TouchableOpacity onPress={() => setVocabFilters([])} style={{ marginTop: 12 }}>
+                  <Text style={[styles.filterSectionLabel, { color: colors.danger, textAlign: 'center' }]}>
+                    Clear all
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </>
+          )}
+
+          {/* Page: pick filter type */}
+          {filterModalPage === 'pick' && (
+            <>
+              <View style={styles.filtersSheetHeader}>
+                <TouchableOpacity onPress={() => setFilterModalPage('list')}>
+                  <Text style={styles.filterBackText}>← Back</Text>
+                </TouchableOpacity>
+                <Text style={[styles.modalTitle, { marginBottom: 0 }]}>Add filter</Text>
+                <View style={{ width: 52 }} />
+              </View>
+              {(['language', 'contains', 'before', 'after'] as const).map((type) => (
+                <TouchableOpacity
+                  key={type}
+                  style={styles.filterTypeRow}
+                  onPress={() => { setFilterInputValue(''); setFilterModalPage(type); }}
+                >
+                  <Text style={styles.filterTypeLabel}>{filterTypeLabel(type)}</Text>
+                  <Text style={styles.filterTypeArrow}>›</Text>
+                </TouchableOpacity>
+              ))}
+            </>
+          )}
+
+          {/* Page: enter language value */}
+          {filterModalPage === 'language' && (
+            <>
+              <View style={styles.filtersSheetHeader}>
+                <TouchableOpacity onPress={() => setFilterModalPage('pick')}>
+                  <Text style={styles.filterBackText}>← Back</Text>
+                </TouchableOpacity>
+                <Text style={[styles.modalTitle, { marginBottom: 0 }]}>Language</Text>
+                <View style={{ width: 52 }} />
+              </View>
+              <View style={styles.langFilterRow}>
+                {vocabLanguages.map((lang) => (
+                  <TouchableOpacity
+                    key={lang}
+                    style={styles.langFilterChip}
+                    onPress={() => {
+                      addVocabFilter({ type: 'language', value: lang });
+                      setFilterModalPage('list');
+                    }}
+                  >
+                    <Text style={styles.langFilterText}>{getLanguageName(lang)}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </>
+          )}
+
+          {/* Page: enter keyword value */}
+          {filterModalPage === 'contains' && (
+            <>
+              <View style={styles.filtersSheetHeader}>
+                <TouchableOpacity onPress={() => setFilterModalPage('pick')}>
+                  <Text style={styles.filterBackText}>← Back</Text>
+                </TouchableOpacity>
+                <Text style={[styles.modalTitle, { marginBottom: 0 }]}>{filterTypeLabel(filterModalPage)}</Text>
+                <View style={{ width: 52 }} />
+              </View>
+              <TextInput
+                style={styles.vocabSearchInput}
+                placeholder="e.g. essen"
+                placeholderTextColor={colors.textFaint}
+                value={filterInputValue}
+                onChangeText={setFilterInputValue}
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoFocus
+                onSubmitEditing={handleAddCurrentFilter}
+              />
+              <TouchableOpacity style={styles.filterAddBtn} onPress={handleAddCurrentFilter}>
+                <Text style={styles.filterAddBtnText}>Add filter</Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {/* Page: date wheel picker (before / after) */}
+          {(filterModalPage === 'before' || filterModalPage === 'after') && (
+            <>
+              <View style={styles.filtersSheetHeader}>
+                <TouchableOpacity onPress={() => setFilterModalPage('pick')}>
+                  <Text style={styles.filterBackText}>← Back</Text>
+                </TouchableOpacity>
+                <Text style={[styles.modalTitle, { marginBottom: 0 }]}>{filterTypeLabel(filterModalPage)}</Text>
+                <View style={{ width: 52 }} />
+              </View>
+              <View style={styles.wheelRow}>
+                <WheelPicker
+                  key={`year-${filterModalPage}`}
+                  items={WHEEL_YEAR_ITEMS}
+                  selectedIndex={filterYear - WHEEL_YEAR_START}
+                  onChange={(i) => setFilterYear(WHEEL_YEAR_START + i)}
+                />
+                <WheelPicker
+                  key={`month-${filterModalPage}`}
+                  items={WHEEL_MONTH_ITEMS}
+                  selectedIndex={filterMonth - 1}
+                  onChange={(i) => setFilterMonth(i + 1)}
+                />
+                <WheelPicker
+                  key={`day-${filterModalPage}-${daysInMonth}`}
+                  items={dayItems}
+                  selectedIndex={Math.min(filterDay - 1, daysInMonth - 1)}
+                  onChange={(i) => setFilterDay(i + 1)}
+                />
+              </View>
+              <TouchableOpacity style={styles.filterAddBtn} onPress={handleAddCurrentFilter}>
+                <Text style={styles.filterAddBtnText}>Add filter</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -1434,6 +1761,26 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   costEventDate: { fontSize: 11, color: colors.textFaint, marginTop: 2 },
 
   // Review page
+  reviewMenuCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  reviewMenuIcon: { fontSize: 28 },
+  reviewMenuTextCol: { flex: 1 },
+  reviewMenuTitle: { fontSize: 16, fontWeight: '700', color: colors.text, marginBottom: 2 },
+  reviewMenuSubtitle: { fontSize: 13, color: colors.textFaint, lineHeight: 18 },
+  reviewBackBtn: { marginBottom: 12 },
+  reviewBackText: { fontSize: 14, fontWeight: '600', color: colors.accent },
   reviewCta: {
     backgroundColor: colors.accent,
     borderRadius: 14,
@@ -1487,6 +1834,80 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
     marginBottom: 12,
   },
   exportBtnText: { fontSize: 13, fontWeight: '600', color: colors.accent },
+  vocabActionRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  filtersBtn: { paddingHorizontal: 18, flex: undefined },
+  filtersSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    paddingBottom: 40,
+    maxHeight: '85%',
+  },
+  filtersSheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  filterDoneText: { fontSize: 15, fontWeight: '700', color: colors.accent },
+  filterSectionLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textFaint,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 8,
+  },
+  filterEmptyText: {
+    fontSize: 14,
+    color: colors.textFaint,
+    textAlign: 'center',
+    paddingVertical: 24,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  filterRowText: { fontSize: 15, color: colors.text, flex: 1 },
+  filterRowRemove: { fontSize: 20, color: colors.textMuted, paddingLeft: 12 },
+  filterAddFilterBtn: {
+    marginTop: 16,
+    borderWidth: 1.5,
+    borderColor: colors.accent,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  filterAddFilterBtnText: { fontSize: 14, fontWeight: '700', color: colors.accent },
+  filterBackText: { fontSize: 15, fontWeight: '600', color: colors.accent, width: 52 },
+  filterTypeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  filterTypeLabel: { fontSize: 16, color: colors.text },
+  filterTypeArrow: { fontSize: 20, color: colors.textFaint },
+  wheelRow: { flexDirection: 'row', gap: 4, marginVertical: 16 },
+  filterAddBtn: {
+    backgroundColor: colors.accent,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  filterAddBtnText: { fontSize: 14, fontWeight: '700', color: colors.accentText },
   langFilterChipActive: { backgroundColor: colors.accent },
   langFilterText: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
   langFilterTextActive: { color: colors.accentText },

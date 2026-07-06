@@ -9,6 +9,7 @@ import apiCostsRouter from './routes/api-costs';
 import notecardsRouter from './routes/notecards';
 import authRouter from './routes/auth';
 import llmRouter from './routes/llm';
+import chatRouter from './routes/chat';
 
 dotenv.config();
 
@@ -38,6 +39,7 @@ app.use('/scrape', scrapeRouter);
 app.use('/api-costs', apiCostsRouter);
 app.use('/notecards', notecardsRouter);
 app.use('/llm', llmRouter);
+app.use('/chat', chatRouter);
 
 async function migrate() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`);

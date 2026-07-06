@@ -28,7 +28,12 @@ router.post('/lookup', async (req: Request, res: Response) => {
   try {
     if (native_language === 'en') {
       const wikt = await lookupWiktionary(word as string, target_language as string);
-      if (wikt) {
+      // Wiktionary's REST summary doesn't expose grammatical gender for most
+      // languages (it lives in the headword line, not the sense definitions).
+      // Don't accept a gender-less noun result here — fall through to Sonnet,
+      // which reliably knows the gender, instead of silently returning null.
+      const needsGender = GENDERED_LANGUAGES.has(target_language as string) && wikt?.partOfSpeech === 'noun';
+      if (wikt && !(needsGender && !wikt.gender)) {
         return res.json({
           definition: wikt.definition,
           partOfSpeech: wikt.partOfSpeech ?? null,

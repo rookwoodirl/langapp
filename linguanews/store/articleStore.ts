@@ -21,7 +21,7 @@ interface ArticleStore {
   loadArticle: (input: string, isUrl: boolean, settings: UserSettings, source?: CostSource) => Promise<void>;
   appendSentences: (articleId: string, sentences: SentencePair[], status: string) => void;
   continueTranslation: (settings: UserSettings) => Promise<void>;
-  lookupWord: (word: string, settings: UserSettings) => Promise<{ definition: string; partOfSpeech?: string; gender?: string; article?: string; infinitive?: string }>;
+  lookupWord: (word: string, language: string, settings: UserSettings) => Promise<{ definition: string; partOfSpeech?: string; gender?: string; article?: string; infinitive?: string }>;
   toggleTTS: () => void;
   saveArticle: () => Promise<string | undefined>;
   loadArticleById: (id: string) => Promise<void>;
@@ -208,15 +208,16 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
     }
   },
 
-  lookupWord: async (word, settings) => {
+  lookupWord: async (word, language, settings) => {
     const cache = get().wordLookupCache;
-    if (cache[word]) return cache[word];
+    const cacheKey = `${language}:${word}`;
+    if (cache[cacheKey]) return cache[cacheKey];
 
     const currentArticle = get().currentArticle;
     const articleText = currentArticle?.sentencePairs.map((p) => p.translation).join(' ');
     const result: LookupResult = await lookupWordDefinition(
       word,
-      settings.targetLanguage,
+      language,
       settings.nativeLanguage ?? 'en',
       articleText,
     );
@@ -224,7 +225,7 @@ export const useArticleStore = create<ArticleStore>((set, get) => ({
     const { vocabInputTokens, vocabOutputTokens } = get();
     const entry = { definition: result.definition, partOfSpeech: result.partOfSpeech, gender: result.gender, article: result.article, infinitive: result.infinitive };
     set({
-      wordLookupCache: { ...cache, [word]: entry },
+      wordLookupCache: { ...cache, [cacheKey]: entry },
       vocabInputTokens: vocabInputTokens + result.inputTokens,
       vocabOutputTokens: vocabOutputTokens + result.outputTokens,
     });

@@ -78,3 +78,24 @@ export interface NotecardList {
   createdAt: number;
   itemCount?: number;
 }
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+}
+
+export interface ChatSession {
+  id: string;
+  mode: 'article' | 'vocab';
+  difficulty: DifficultyLevel;
+  targetLanguage: LanguageCode;
+  nativeLanguage: LanguageCode;
+  articleId?: string;
+  articleTitle?: string;
+  vocabWords?: string[];
+  vocabLabel?: string;
+  messages: ChatMessage[];
+  createdAt: number;
+  updatedAt: number;
+}

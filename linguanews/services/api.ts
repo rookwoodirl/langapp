@@ -312,6 +312,39 @@ export async function apiGetVerbConjugation(params: {
   };
 }
 
+export async function apiSendChatMessage(params: {
+  mode: 'article' | 'vocab';
+  difficulty: string;
+  targetLanguage: string;
+  nativeLanguage: string;
+  messages: { role: 'user' | 'assistant'; content: string }[];
+  articleId?: string;
+  vocabWords?: string[];
+}): Promise<{ reply: string; inputTokens: number; outputTokens: number }> {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/chat/message`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: userId,
+      mode: params.mode,
+      difficulty: params.difficulty,
+      target_language: params.targetLanguage,
+      native_language: params.nativeLanguage,
+      messages: params.messages,
+      article_id: params.articleId ?? null,
+      vocab_words: params.vocabWords ?? null,
+    }),
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Chat failed');
+  return {
+    reply: data.reply as string,
+    inputTokens: (data.inputTokens as number) ?? 0,
+    outputTokens: (data.outputTokens as number) ?? 0,
+  };
+}
+
 export async function apiCreateDeviceArticle(params: {
   sourceUrl: string;
   title?: string;

@@ -107,6 +107,7 @@ export default function ArticleScreen() {
 
   const [popupVisible, setPopupVisible] = useState(false);
   const [popupWord, setPopupWord] = useState('');
+  const [popupLanguage, setPopupLanguage] = useState('');
   const [popupDefinition, setPopupDefinition] = useState<string | null>(null);
   const [popupPos, setPopupPos] = useState<string | undefined>();
   const [popupGender, setPopupGender] = useState<string | undefined>();
@@ -140,9 +141,10 @@ export default function ArticleScreen() {
     );
   }
 
-  async function handleWordTap(word: string, definition?: string, partOfSpeech?: string) {
+  async function handleWordTap(word: string, language: string, definition?: string, partOfSpeech?: string) {
     if (!word.trim()) return;
     setPopupWord(word);
+    setPopupLanguage(language);
     setPopupDefinition(definition ?? null);
     setPopupPos(partOfSpeech);
     setPopupGender(undefined);
@@ -154,7 +156,7 @@ export default function ArticleScreen() {
       try {
         const raw = await AsyncStorage.getItem(SETTINGS_KEY);
         const settings = raw ? JSON.parse(raw) : {};
-        const result = await lookupWord(word, settings);
+        const result = await lookupWord(word, language, settings);
         setPopupDefinition(result.definition);
         if (result.partOfSpeech) setPopupPos(result.partOfSpeech);
         if (result.gender) setPopupGender(result.gender);
@@ -178,7 +180,7 @@ export default function ArticleScreen() {
 
     if (isVerb) {
       try {
-        conjugation = (await getVerbConjugation(popupWord, article.targetLanguage)) ?? undefined;
+        conjugation = (await getVerbConjugation(popupWord, popupLanguage)) ?? undefined;
         if (conjugation?.infinitive) saveWord = conjugation.infinitive;
       } catch {
         // Save the word without conjugation if the conjugation fetch fails
@@ -187,7 +189,7 @@ export default function ArticleScreen() {
 
     await addWord({
       word: saveWord,
-      language: article.targetLanguage,
+      language: popupLanguage,
       definition: popupDefinition ?? '',
       partOfSpeech: popupPos,
       gender: popupGender,
