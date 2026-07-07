@@ -1,6 +1,5 @@
 import { Article, NotecardList, ReviewGrade, UserVocabWord, VerbConjugation } from '../types';
 import { getAuthState } from './auth';
-import { useCreditStore } from '../store/creditStore';
 
 const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL ?? '').replace(/\/$/, '');
 
@@ -8,12 +7,6 @@ export async function getUserId(): Promise<string> {
   const auth = await getAuthState();
   if (!auth) throw new Error('Not signed in');
   return auth.userId;
-}
-
-async function getAuthToken(): Promise<string> {
-  const auth = await getAuthState();
-  if (!auth) throw new Error('Not signed in');
-  return auth.token;
 }
 
 // Safely parse JSON — if the server returns an HTML error page (gateway
@@ -25,34 +18,6 @@ async function parseJson(res: Response): Promise<unknown> {
     throw new Error(`Server error (HTTP ${res.status}). Try again in a moment.`);
   }
   return res.json();
-}
-
-export class InsufficientCreditsError extends Error {
-  balanceUsd: number;
-  constructor(balanceUsd: number) {
-    super('insufficient_credits');
-    this.balanceUsd = balanceUsd;
-  }
-}
-
-// Shared request path for the JWT-protected, credit-metered endpoints
-// (translation, lookup, vocab-select, conjugate, chat). Centralizing the
-// 402 check here means the paywall trigger doesn't need to be duplicated at
-// each of those call sites.
-async function requestJson(path: string, init: RequestInit, defaultError: string): Promise<Record<string, unknown>> {
-  const token = await getAuthToken();
-  const res = await fetch(`${BACKEND_URL}${path}`, {
-    ...init,
-    headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` },
-  });
-  const data = await parseJson(res) as Record<string, unknown>;
-  if (res.status === 402) {
-    const balanceUsd = typeof data.balanceUsd === 'number' ? data.balanceUsd : 0;
-    useCreditStore.getState().showPaywall();
-    throw new InsufficientCreditsError(balanceUsd);
-  }
-  if (!res.ok) throw new Error((data.error as string) ?? defaultError);
-  return data;
 }
 
 function rowToArticle(row: Record<string, unknown>): Article {
@@ -91,10 +56,12 @@ export async function apiStartTranslation(params: {
   nativeLanguage: string;
   difficulty: string;
 }): Promise<{ id: string }> {
-  const data = await requestJson('/articles/translate', {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/articles/translate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      user_id: userId,
       text: params.text,
       url: params.sourceUrl ?? null,
       title: params.title ?? null,
@@ -103,7 +70,9 @@ export async function apiStartTranslation(params: {
       native_language: params.nativeLanguage,
       difficulty: params.difficulty,
     }),
-  }, 'Failed to start translation');
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Failed to start translation');
   return { id: data.id as string };
 }
 
@@ -238,14 +207,20 @@ export async function apiContinueTranslation(articleId: string, params: {
   difficulty: string;
   nativeLanguage: string;
 }): Promise<void> {
-  await requestJson(`/articles/${encodeURIComponent(articleId)}/continue`, {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/articles/${encodeURIComponent(articleId)}/continue`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      user_id: userId,
       difficulty: params.difficulty,
       native_language: params.nativeLanguage,
     }),
-  }, 'Failed to continue translation');
+  });
+  if (!res.ok) {
+    const data = await parseJson(res).catch(() => ({})) as Record<string, unknown>;
+    throw new Error((data.error as string) ?? 'Failed to continue translation');
+  }
 }
 
 export async function apiLookupWord(params: {
@@ -262,16 +237,20 @@ export async function apiLookupWord(params: {
   inputTokens: number;
   outputTokens: number;
 }> {
-  const data = await requestJson('/llm/lookup', {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/llm/lookup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      user_id: userId,
       word: params.word,
       target_language: params.targetLanguage,
       native_language: params.nativeLanguage,
       article_context: params.articleContext ?? null,
     }),
-  }, 'Lookup failed');
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Lookup failed');
   return {
     definition: data.definition as string,
     partOfSpeech: (data.partOfSpeech as string) || undefined,
@@ -289,16 +268,20 @@ export async function apiSelectVocabWords(params: {
   nativeLanguage: string;
   existingWords: string[];
 }): Promise<{ words: string[]; inputTokens: number; outputTokens: number }> {
-  const data = await requestJson('/llm/vocab-select', {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/llm/vocab-select`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      user_id: userId,
       text: params.text,
       target_language: params.targetLanguage,
       native_language: params.nativeLanguage,
       existing_words: params.existingWords,
     }),
-  }, 'Vocab selection failed');
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Vocab selection failed');
   return {
     words: data.words as string[],
     inputTokens: (data.inputTokens as number) ?? 0,
@@ -310,14 +293,18 @@ export async function apiGetVerbConjugation(params: {
   verb: string;
   language: string;
 }): Promise<{ conjugation: import('../types').VerbConjugation | null; inputTokens: number; outputTokens: number }> {
-  const data = await requestJson('/llm/conjugate', {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/llm/conjugate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      user_id: userId,
       verb: params.verb,
       language: params.language,
     }),
-  }, 'Conjugation failed');
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Conjugation failed');
   return {
     conjugation: (data.conjugation as import('../types').VerbConjugation) ?? null,
     inputTokens: (data.inputTokens as number) ?? 0,
@@ -335,10 +322,12 @@ export async function apiSendChatMessage(params: {
   vocabWords?: string[];
   vocabLabel?: string;
 }): Promise<{ reply: string; inputTokens: number; outputTokens: number }> {
-  const data = await requestJson('/chat/message', {
+  const userId = await getUserId();
+  const res = await fetch(`${BACKEND_URL}/chat/message`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      user_id: userId,
       mode: params.mode,
       difficulty: params.difficulty,
       target_language: params.targetLanguage,
@@ -348,7 +337,9 @@ export async function apiSendChatMessage(params: {
       vocab_words: params.vocabWords ?? null,
       vocab_label: params.vocabLabel ?? null,
     }),
-  }, 'Chat failed');
+  });
+  const data = await parseJson(res) as Record<string, unknown>;
+  if (!res.ok) throw new Error((data.error as string) ?? 'Chat failed');
   return {
     reply: data.reply as string,
     inputTokens: (data.inputTokens as number) ?? 0,
@@ -598,69 +589,4 @@ export async function apiRemoveFromNotecardList(listId: string, userVocabId: str
   await fetch(`${BACKEND_URL}/notecards/lists/${listId}/items/${userVocabId}?user_id=${encodeURIComponent(userId)}`, {
     method: 'DELETE',
   });
-}
-
-export interface CreditPack {
-  productId: string;
-  creditUsd: number;
-  displayName: string;
-}
-
-export interface CreditTransaction {
-  id: string;
-  createdAt: number;
-  type: string;
-  amountUsd: number;
-  balanceAfterUsd: number;
-  source?: string;
-}
-
-export async function apiGetCreditBalance(): Promise<number> {
-  try {
-    const token = await getAuthToken();
-    const res = await fetch(`${BACKEND_URL}/credits/balance`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const data = await parseJson(res) as Record<string, unknown>;
-    if (!res.ok) return 0;
-    return (data.balance as number) ?? 0;
-  } catch {
-    return 0;
-  }
-}
-
-export async function apiGetCreditTransactions(): Promise<CreditTransaction[]> {
-  try {
-    const token = await getAuthToken();
-    const res = await fetch(`${BACKEND_URL}/credits/transactions`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return [];
-    const data = (await parseJson(res)) as Record<string, unknown>[];
-    return data.map((row) => ({
-      id: row.id as string,
-      createdAt: new Date(row.created_at as string).getTime(),
-      type: row.type as string,
-      amountUsd: Number(row.amount_usd),
-      balanceAfterUsd: Number(row.balance_after_usd),
-      source: (row.source as string) ?? undefined,
-    }));
-  } catch {
-    return [];
-  }
-}
-
-export async function apiGetCreditPacks(): Promise<CreditPack[]> {
-  try {
-    const res = await fetch(`${BACKEND_URL}/credits/packs`);
-    if (!res.ok) return [];
-    const data = (await parseJson(res)) as Record<string, unknown>[];
-    return data.map((row) => ({
-      productId: row.product_id as string,
-      creditUsd: Number(row.credit_usd),
-      displayName: row.display_name as string,
-    }));
-  } catch {
-    return [];
-  }
 }

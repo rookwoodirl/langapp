@@ -4,8 +4,7 @@ import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { router } from 'expo-router';
-import { saveAuthState, getAuthState } from '../services/auth';
-import { initPurchases } from '../services/purchases';
+import { saveAuthState } from '../services/auth';
 import { useColors } from '../hooks/useColors';
 import { ThemeColors } from '../constants/theme';
 
@@ -36,8 +35,6 @@ export default function LoginScreen() {
         const token = parsed.queryParams?.token as string | undefined;
         if (token) {
           await saveAuthState(token);
-          const auth = await getAuthState();
-          if (auth) initPurchases(auth.userId);
           router.replace('/');
           return;
         }

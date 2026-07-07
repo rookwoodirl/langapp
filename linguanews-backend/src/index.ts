@@ -10,7 +10,6 @@ import notecardsRouter from './routes/notecards';
 import authRouter from './routes/auth';
 import llmRouter from './routes/llm';
 import chatRouter from './routes/chat';
-import creditsRouter from './routes/credits';
 
 dotenv.config();
 
@@ -41,7 +40,6 @@ app.use('/api-costs', apiCostsRouter);
 app.use('/notecards', notecardsRouter);
 app.use('/llm', llmRouter);
 app.use('/chat', chatRouter);
-app.use('/credits', creditsRouter);
 
 async function migrate() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`);
@@ -156,49 +154,6 @@ async function migrate() {
 
   await pool.query(`ALTER TABLE api_costs ADD COLUMN IF NOT EXISTS description TEXT`);
   await pool.query(`ALTER TABLE api_costs ADD COLUMN IF NOT EXISTS article_id TEXT`);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS user_credits (
-      user_id     TEXT        PRIMARY KEY,
-      balance_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS credit_transactions (
-      id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id           TEXT        NOT NULL,
-      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      type              TEXT        NOT NULL,
-      amount_usd        NUMERIC(12,6) NOT NULL,
-      balance_after_usd NUMERIC(12,6) NOT NULL,
-      source            TEXT,
-      reference_id      TEXT
-    )
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS credit_transactions_user_id_idx ON credit_transactions (user_id, created_at DESC)`);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS revenuecat_events (
-      event_id    TEXT        PRIMARY KEY,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      event_type  TEXT        NOT NULL,
-      app_user_id TEXT        NOT NULL,
-      raw_payload JSONB       NOT NULL
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS credit_packs (
-      product_id   TEXT        PRIMARY KEY,
-      credit_usd   NUMERIC(12,6) NOT NULL,
-      display_name TEXT        NOT NULL,
-      active       BOOLEAN     NOT NULL DEFAULT true,
-      sort_order   INT         NOT NULL DEFAULT 0
-    )
-  `);
 
   console.log('Migrations complete');
 }

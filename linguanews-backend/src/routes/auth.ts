@@ -1,10 +1,7 @@
 import { Router, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { pool } from '../db';
 
 const router = Router();
-
-const STARTER_BALANCE_USD = 1.0;
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? '';
@@ -100,13 +97,6 @@ router.get('/google/callback', async (req: Request, res: Response) => {
       { userId: user.sub, email: user.email, name: user.name },
       JWT_SECRET,
       { expiresIn: '365d' },
-    );
-
-    // Cheap on every login; guarantees a credits row exists before any paid
-    // action, and grants new users a small free balance to try the app.
-    await pool.query(
-      `INSERT INTO user_credits (user_id, balance_usd) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING`,
-      [user.sub, STARTER_BALANCE_USD],
     );
 
     res.redirect(`${appRedirect}?token=${encodeURIComponent(token)}`);

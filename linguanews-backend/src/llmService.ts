@@ -1,6 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { pool } from './db';
-import { checkBalance, chargeUsage, CREDIT_MARGIN } from './creditService';
 
 const MODEL_RATES: Record<string, { input: number; output: number }> = {
   'claude-sonnet-4-6':         { input: 3.0,  output: 15.0 },
@@ -32,8 +31,6 @@ export async function callLLM(params: LLMCallParams): Promise<LLMCallResult> {
   const client = new Anthropic({ apiKey });
   const { userId, source, model, maxTokens, language, system, messages, description, articleId } = params;
 
-  await checkBalance(userId);
-
   const message = await client.messages.create({
     model,
     max_tokens: maxTokens,
@@ -57,10 +54,6 @@ export async function callLLM(params: LLMCallParams): Promise<LLMCallResult> {
       description ?? null, articleId ?? null,
     ],
   );
-
-  const costUsd = (message.usage.input_tokens / 1_000_000) * rates.input
-    + (message.usage.output_tokens / 1_000_000) * rates.output;
-  await chargeUsage(userId, source, costUsd * CREDIT_MARGIN);
 
   return {
     text: content.text,
