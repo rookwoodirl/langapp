@@ -12,6 +12,7 @@ The repo has two workspaces:
 
 - **Never commit to GitHub.** The user handles all git commits and pushes.
 - LLM calls are expensive; prefer free alternatives (Wiktionary) first.
+- **Zero Anthropic calls from the client, ever.** Every LLM call — translation, word lookup, conjugation, vocab selection, chat — happens server-side through `callLLM()` in `linguanews-backend/src/llmService.ts`, which also records the `api_costs` row. The client never holds an Anthropic API key and never imports `@anthropic-ai/sdk`. When adding a new LLM-backed feature, add a backend route that calls `callLLM()` and have the client hit that route via `services/api.ts` — do not reach for the Anthropic SDK client-side. `services/llm.ts` and `services/translator.ts` are intentionally empty placeholders left from the migration off client-side calls; don't resurrect them.
 
 ---
 
@@ -19,16 +20,12 @@ The repo has two workspaces:
 
 ### Frontend (`linguanews/.env`)
 ```
-EXPO_PUBLIC_ANTHROPIC_API_KEY=...   # used for vocab lookups / conjugations (client-side)
 EXPO_PUBLIC_BACKEND_URL=https://linguanews-backend-production.up.railway.app
-EXPO_PUBLIC_REVENUE_CAT_API_KEY_IOS=...
-EXPO_PUBLIC_REVENUE_CAT_API_KEY_ANDROID=...
-STRIPE_PUBLISHABLE_KEY=...
 ```
 
 ### Backend (Railway environment variables)
 ```
-ANTHROPIC_API_KEY=...        # used server-side for streaming translation
+ANTHROPIC_API_KEY=...        # used server-side for ALL LLM calls (translation, lookup, conjugation, vocab selection, chat)
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 JWT_SECRET=...
@@ -37,7 +34,7 @@ DATABASE_URL=...             # injected by Railway PostgreSQL plugin
 PORT=...                     # injected by Railway
 ```
 
-**Important:** `ANTHROPIC_API_KEY` must be set in Railway for translation to work. The mobile app uses `EXPO_PUBLIC_ANTHROPIC_API_KEY` only for vocab/conjugation calls (still client-side). Translation itself moved server-side.
+**Important:** `ANTHROPIC_API_KEY` only needs to be set in Railway. The client has no Anthropic key and makes no Anthropic calls — see [Critical rules](#critical-rules).
 
 ---
 
@@ -68,22 +65,21 @@ Articles are automatically saved on the backend from the moment translation star
 **Article reading:** `app/article/[id].tsx` — full-screen reader with ParagraphCard components. Polls for new sentences while `status === 'translating'`. Long-press or tap on a word triggers `lookupWord()`.
 
 **Stores (Zustand):**
-- `store/articleStore.ts` — `loadArticle()` kicks off backend translation job, `lookupWord()` (with in-memory cache), `appendSentences()` for poll-driven updates, `continueTranslation()` for legacy articles with `remainingText`
+- `store/articleStore.ts` — `loadArticle()` kicks off backend translation job, `lookupWord()` (with in-memory cache) calls `apiLookupWord()`, `appendSentences()` for poll-driven updates, `continueTranslation()` for legacy articles with `remainingText`
 - `store/vocabStore.ts` — saved vocabulary, optimistic add then reload
 - `store/usageStore.ts` — session-level token usage tracking
 - `store/notecardStore.ts` — notecard lists
+- `store/chatStore.ts` — conversation practice (article-discussion or vocab-drill mode), sends turns via `apiSendChatMessage()`
 - `store/themeStore.ts` — light/dark/system theme
 
 **Services:**
-- `services/llm.ts` — **all client-side LLM calls go through `callLLM()`**. Wraps Anthropic SDK, records cost to backend after every call.
-- `services/vocab.ts` — three exports:
-  - `lookupWordDefinition(word, targetLang, nativeLanguage, apiKey, articleContext?)` — tries Wiktionary first (when `nativeLanguage === 'en'`), falls back to Sonnet. Returns `LookupResult`.
-  - `selectVocabWords(text, targetLang, nativeLanguage, existingWords, apiKey)` — Haiku call, returns `string[]`. Defensive parsing handles Haiku sometimes returning `{"word":"..."}` objects.
-  - `getVerbConjugation(verb, language, apiKey)` — Haiku call, returns `VerbConjugation`.
-- `services/wiktionary.ts` — free word lookup via English Wiktionary REST API. 4-second abort timeout. Only called when `nativeLanguage === 'en'`.
-- `services/translator.ts` — legacy `translateArticle()` (still used by `continueTranslation()` for old articles with `remainingText`). New articles use the backend streaming flow instead.
-- `services/api.ts` — all REST calls to backend. Auth identity from `getAuthState()` (Google OAuth JWT stored in AsyncStorage).
-- `services/apiCosts.ts` — `recordApiCost()` POSTs token usage after every client-side LLM call.
+- `services/llm.ts`, `services/translator.ts` — empty placeholders left over from the move off client-side Anthropic calls. Do not add code to them; see [Critical rules](#critical-rules).
+- `services/vocab.ts` — thin wrappers that just forward to `services/api.ts`:
+  - `lookupWordDefinition(word, targetLang, nativeLanguage, articleContext?)` → `apiLookupWord()` → backend `POST /llm/lookup` (Wiktionary first server-side when `nativeLanguage === 'en'`, else Sonnet fallback). Returns `LookupResult`.
+  - `selectVocabWords(text, targetLang, nativeLanguage, existingWords)` → `apiSelectVocabWords()` → backend `POST /llm/vocab-select` (Haiku). Defensive parsing handles the model sometimes returning `{"word":"..."}` objects.
+  - `getVerbConjugation(verb, language)` → `apiGetVerbConjugation()` → backend `POST /llm/conjugate` (Haiku).
+- `services/api.ts` — all REST calls to backend, including the LLM-backed ones above and `apiSendChatMessage()` → `POST /chat/message`. Auth identity from `getAuthState()` (Google OAuth JWT stored in AsyncStorage).
+- `services/apiCosts.ts` — cost recording now happens server-side inside `callLLM()`; this file only keeps the `CostSource` type for compatibility.
 - `services/scraper.ts` — `scrapeArticle(url)` → `POST /scrape` → `{ title, textContent }`.
 - `services/auth.ts` — `getAuthState()`, `saveAuthState(token)`, `clearAuthState()`. Token stored in AsyncStorage as `@linguanews/auth`.
 - `services/tts.ts` — text-to-speech.
@@ -109,9 +105,9 @@ Articles are automatically saved on the backend from the moment translation star
 - Label mapping: `article` → "Articles", `article-regeneration` → "Re-translations", `vocab` → "Vocab", `vocab_selection` → "Vocab picks", `audio` → "Audio"
 
 **Generate Vocab pipeline** (`handleGenerateVocab` in `app/index.tsx`):
-1. `selectVocabWords()` → candidate words (Haiku, `source: 'vocab_selection'`)
-2. For each word: `lookupWordDefinition()` → rich lookup (Wiktionary or Sonnet)
-3. If verb: `getVerbConjugation()` → conjugation table (Haiku)
+1. `selectVocabWords()` → candidate words (backend `POST /llm/vocab-select`, Haiku, `source: 'vocab_selection'`)
+2. For each word: `lookupWordDefinition()` → rich lookup (backend `POST /llm/lookup`, Wiktionary or Sonnet)
+3. If verb: `getVerbConjugation()` → conjugation table (backend `POST /llm/conjugate`, Haiku)
 4. `saveWord = conjugation?.infinitive ?? lookup.infinitive ?? selectedWord`
 5. `vocabStore.addWord()` with all fields
 
@@ -137,8 +133,12 @@ Express server (`src/index.ts`). Runs idempotent migrations on startup (`CREATE 
 - `GET /vocab?user_id=` — get user's saved words
 - `PUT /vocab/:id` — update a vocab word
 - `DELETE /vocab/:id?user_id=` — remove from user_vocab
-- `POST /api-costs` — record a client-side cost entry
+- `POST /api-costs` — record a cost entry (legacy path; costs are now written directly by `callLLM()`)
 - `GET /api-costs/events?user_id=` — list cost events (includes `description`, `articleId`)
+- `POST /llm/lookup` — word definition lookup (Wiktionary first when `native_language === 'en'`, else Sonnet), calls `callLLM()`
+- `POST /llm/vocab-select` — candidate vocab words from article text (Haiku), calls `callLLM()`
+- `POST /llm/conjugate` — verb conjugation table (Haiku), calls `callLLM()`
+- `POST /chat/message` — conversation-practice turn, article- or vocab-grounded (Sonnet), calls `callLLM()`
 - `POST /scrape` — proxy scrape via Readability; returns `{ title, textContent }`
 - `GET /auth/google` — start Google OAuth flow
 - `GET /auth/google/callback` — exchange code, mint JWT, redirect to app
@@ -154,6 +154,12 @@ Express server (`src/index.ts`). Runs idempotent migrations on startup (`CREATE 
 - `api_costs` — `user_id`, `source`, `model`, `language`, `input_credit_rate`, `total_input_credits`, `output_credit_rate`, `total_output_credits`, `description TEXT` (article title), `article_id TEXT`
 - `notecard_lists` — `user_id`, `name`, `language`
 - `notecard_list_items` — `list_id → notecard_lists`, `user_vocab_id → user_vocab`
+
+**LLM service (`src/llmService.ts`):**
+- `callLLM({ userId, source, model, maxTokens, language?, system?, messages, description?, articleId? })` is the **single chokepoint for every Anthropic call in the app** — translation, lookup, conjugation, vocab selection, chat all go through it.
+- Instantiates the Anthropic client from `process.env.ANTHROPIC_API_KEY`, calls `messages.create()`, and writes the resulting `api_costs` row itself (rate lookup by model in `MODEL_RATES`) before returning `{ text, inputTokens, outputTokens }` to the calling route.
+- Any new LLM-backed feature should add a route that calls this function rather than talking to Anthropic directly, and definitely never from the client — see [Critical rules](#critical-rules).
+- `src/wiktionary.ts` — server-side port of the free Wiktionary lookup (used by `POST /llm/lookup`); 4-second abort timeout, only tried when `native_language === 'en'`.
 
 **Translation service (`src/translationService.ts`):**
 - Streams from Claude with NDJSON output: title line first, then sentence pairs
@@ -171,13 +177,16 @@ Express server (`src/index.ts`). Runs idempotent migrations on startup (`CREATE 
 
 ## Models used
 
-| Use case | Where | Model | Source label |
+All model calls happen server-side (`linguanews-backend/src/llmService.ts` → `callLLM()`). The client never talks to Anthropic.
+
+| Use case | Backend route | Model | Source label |
 |---|---|---|---|
-| Article translation | Backend streaming | `claude-sonnet-4-6` | `article` |
-| Word lookup (LLM fallback) | Client | `claude-sonnet-4-6` | `vocab` |
-| Verb conjugation | Client | `claude-haiku-4-5-20251001` | `vocab` |
-| Vocab word selection | Client | `claude-haiku-4-5-20251001` | `vocab_selection` |
-| Word lookup (primary, free) | Client | Wiktionary REST API | _(no cost)_ |
+| Article translation | streaming job (`translationService.ts`) | `claude-sonnet-4-6` | `article` |
+| Word lookup (LLM fallback) | `POST /llm/lookup` | `claude-sonnet-4-6` | `vocab` |
+| Verb conjugation | `POST /llm/conjugate` | `claude-haiku-4-5-20251001` | `vocab` |
+| Vocab word selection | `POST /llm/vocab-select` | `claude-haiku-4-5-20251001` | `vocab_selection` |
+| Chat / conversation practice | `POST /chat/message` | `claude-sonnet-4-6` | `chat` |
+| Word lookup (primary, free) | `POST /llm/lookup` (tries first) | Wiktionary REST API | _(no cost)_ |
 
 ---
 
