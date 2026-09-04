@@ -110,6 +110,14 @@ export default function HomeScreen() {
   const [listModal, setListModal] = useState<{ mode: 'create' | 'rename'; list?: NotecardList } | null>(null);
   const [listForm, setListForm] = useState({ name: '', language: '' });
   const [pendingAddWord, setPendingAddWord] = useState<UserVocabWord | null>(null);
+  const [createVocabModal, setCreateVocabModal] = useState(false);
+  const [createVocabForm, setCreateVocabForm] = useState({
+    word: '', wordLanguage: DEFAULT_TARGET_LANGUAGE, definitionLanguage: DEFAULT_NATIVE_LANGUAGE,
+    definition: '', partOfSpeech: '', gender: '', article: '',
+  });
+  const [createVocabConjugation, setCreateVocabConjugation] = useState<VerbConjugation | undefined>(undefined);
+  const [createVocabLookupLoading, setCreateVocabLookupLoading] = useState(false);
+  const [savingCreateVocab, setSavingCreateVocab] = useState(false);
   const [savingList, setSavingList] = useState(false);
   const [viewingList, setViewingList] = useState<NotecardList | null>(null);
   const [listBrowseLoading, setListBrowseLoading] = useState(false);
@@ -266,6 +274,81 @@ export default function HomeScreen() {
       Alert.alert('Error', err instanceof Error ? err.message : 'Failed to update word.');
     } finally {
       setSavingEdit(false);
+    }
+  }
+
+  function openCreateVocabModal() {
+    setCreateVocabForm({
+      word: '',
+      wordLanguage: settings.targetLanguage,
+      definitionLanguage: settings.nativeLanguage ?? 'en',
+      definition: '', partOfSpeech: '', gender: '', article: '',
+    });
+    setCreateVocabConjugation(undefined);
+    setCreateVocabModal(true);
+  }
+
+  async function handleAutoFillCreateVocab() {
+    const word = createVocabForm.word.trim();
+    if (!word) {
+      Alert.alert('Enter a word first', 'Type the word you want to look up.');
+      return;
+    }
+    setCreateVocabLookupLoading(true);
+    try {
+      const lookup = await lookupWordDefinition(word, createVocabForm.wordLanguage, createVocabForm.definitionLanguage);
+      useUsageStore.getState().addVocab(lookup.inputTokens, lookup.outputTokens);
+      const isVerb = lookup.partOfSpeech?.toLowerCase().includes('verb');
+      const wordCandidate = lookup.infinitive ?? word;
+      const conjugation = isVerb
+        ? (await getVerbConjugation(wordCandidate, createVocabForm.wordLanguage)) ?? undefined
+        : undefined;
+      setCreateVocabConjugation(conjugation);
+      setCreateVocabForm((prev) => ({
+        ...prev,
+        word: conjugation?.infinitive ?? lookup.infinitive ?? prev.word,
+        definition: lookup.definition ?? prev.definition,
+        partOfSpeech: lookup.partOfSpeech ?? prev.partOfSpeech,
+        gender: lookup.gender ?? prev.gender,
+        article: lookup.article ?? prev.article,
+      }));
+    } catch (err) {
+      Alert.alert('Lookup failed', err instanceof Error ? err.message : 'Could not look up this word.');
+    } finally {
+      setCreateVocabLookupLoading(false);
+    }
+  }
+
+  async function handleSaveCreateVocab() {
+    const word = createVocabForm.word.trim();
+    if (!word) {
+      Alert.alert('Word required', 'Enter a word before saving.');
+      return;
+    }
+    if (!createVocabForm.definition.trim()) {
+      Alert.alert('Definition required', 'Enter a definition, or tap Auto-fill to look one up.');
+      return;
+    }
+    setSavingCreateVocab(true);
+    try {
+      await addWord({
+        word,
+        language: createVocabForm.wordLanguage,
+        definition: createVocabForm.definition.trim(),
+        partOfSpeech: createVocabForm.partOfSpeech.trim() || undefined,
+        gender: createVocabForm.gender.trim() || undefined,
+        article: createVocabForm.article.trim() || undefined,
+        conjugation: createVocabConjugation,
+      });
+      setCreateVocabForm((prev) => ({
+        ...prev,
+        word: '', definition: '', partOfSpeech: '', gender: '', article: '',
+      }));
+      setCreateVocabConjugation(undefined);
+    } catch (err) {
+      Alert.alert('Error', err instanceof Error ? err.message : 'Failed to save word.');
+    } finally {
+      setSavingCreateVocab(false);
     }
   }
 
@@ -698,6 +781,9 @@ export default function HomeScreen() {
       keyExtractor={(w) => w.id}
       ListHeaderComponent={
         <View>
+          <TouchableOpacity style={styles.createVocabBtn} onPress={openCreateVocabModal}>
+            <Text style={styles.createVocabBtnText}>+ Create vocab</Text>
+          </TouchableOpacity>
           {vocabFilters.length > 0 && (
             <View style={styles.langFilterRow}>
               {vocabFilters.map((f, i) => (
@@ -1254,6 +1340,104 @@ export default function HomeScreen() {
             </TouchableOpacity>
             <TouchableOpacity style={styles.editSaveBtn} onPress={handleSaveEdit} disabled={savingEdit}>
               <Text style={styles.editSaveText}>{savingEdit ? 'Saving…' : 'Save'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Create vocab modal */}
+      <Modal
+        visible={createVocabModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setCreateVocabModal(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setCreateVocabModal(false)} />
+        <View style={styles.modalSheet}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>Create Vocab</Text>
+          <View style={styles.editActions}>
+            <TouchableOpacity style={styles.editCancelBtn} onPress={() => setCreateVocabModal(false)}>
+              <Text style={styles.editCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.editSaveBtn} onPress={handleSaveCreateVocab} disabled={savingCreateVocab}>
+              <Text style={styles.editSaveText}>{savingCreateVocab ? 'Saving…' : 'Save'}</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled">
+            <View style={styles.createVocabLangRow}>
+              <View style={{ flex: 1 }}>
+                <LanguagePicker
+                  label="Word language"
+                  value={createVocabForm.wordLanguage}
+                  onChange={(v) => setCreateVocabForm({ ...createVocabForm, wordLanguage: v })}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <LanguagePicker
+                  label="Definition language"
+                  value={createVocabForm.definitionLanguage}
+                  onChange={(v) => setCreateVocabForm({ ...createVocabForm, definitionLanguage: v })}
+                />
+              </View>
+            </View>
+            <Text style={styles.editLabel}>Word</Text>
+            <TextInput
+              style={styles.editInput}
+              value={createVocabForm.word}
+              onChangeText={(v) => setCreateVocabForm({ ...createVocabForm, word: v })}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="e.g. correr"
+              placeholderTextColor={colors.textFaint}
+            />
+            <TouchableOpacity
+              style={styles.createVocabAutoBtn}
+              onPress={handleAutoFillCreateVocab}
+              disabled={createVocabLookupLoading}
+            >
+              <Text style={styles.createVocabAutoBtnText}>
+                {createVocabLookupLoading ? 'Looking up…' : 'Auto-fill from Wiktionary'}
+              </Text>
+            </TouchableOpacity>
+            <Text style={styles.editLabel}>Definition</Text>
+            <TextInput
+              style={[styles.editInput, styles.editInputMultiline]}
+              value={createVocabForm.definition}
+              onChangeText={(v) => setCreateVocabForm({ ...createVocabForm, definition: v })}
+              multiline
+            />
+            <Text style={styles.editLabel}>Part of speech</Text>
+            <TextInput
+              style={styles.editInput}
+              value={createVocabForm.partOfSpeech}
+              onChangeText={(v) => setCreateVocabForm({ ...createVocabForm, partOfSpeech: v })}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Text style={styles.editLabel}>Gender</Text>
+            <TextInput
+              style={styles.editInput}
+              value={createVocabForm.gender}
+              onChangeText={(v) => setCreateVocabForm({ ...createVocabForm, gender: v })}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Text style={styles.editLabel}>Article</Text>
+            <TextInput
+              style={styles.editInput}
+              value={createVocabForm.article}
+              onChangeText={(v) => setCreateVocabForm({ ...createVocabForm, article: v })}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </ScrollView>
+          <View style={styles.editActions}>
+            <TouchableOpacity style={styles.editCancelBtn} onPress={() => setCreateVocabModal(false)}>
+              <Text style={styles.editCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.editSaveBtn} onPress={handleSaveCreateVocab} disabled={savingCreateVocab}>
+              <Text style={styles.editSaveText}>{savingCreateVocab ? 'Saving…' : 'Save'}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1836,6 +2020,20 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
   exportBtnText: { fontSize: 13, fontWeight: '600', color: colors.accent },
   vocabActionRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
   filtersBtn: { paddingHorizontal: 18, flex: undefined },
+  createVocabBtn: {
+    backgroundColor: colors.accent,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  createVocabBtnText: { fontSize: 13, fontWeight: '700', color: colors.accentText },
+  createVocabLangRow: { flexDirection: 'row', gap: 8 },
+  createVocabAutoBtn: {
+    marginTop: 10, borderWidth: 1.5, borderColor: colors.accent,
+    borderRadius: 10, paddingVertical: 10, alignItems: 'center',
+  },
+  createVocabAutoBtnText: { fontSize: 13, fontWeight: '600', color: colors.accent },
   filtersSheet: {
     position: 'absolute',
     bottom: 0,

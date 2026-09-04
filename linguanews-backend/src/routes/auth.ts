@@ -11,7 +11,13 @@ const BACKEND_URL = (process.env.BACKEND_URL ?? '').replace(/\/$/, '');
 const GOOGLE_CALLBACK = `${BACKEND_URL}/auth/google/callback`;
 
 // Only allow redirects back to the app — never to arbitrary URLs
-const ALLOWED_PREFIXES = ['exp://', 'linguanews://'];
+const ALLOWED_PREFIXES = [
+  'exp://',
+  'linguanews://',
+  'http://localhost',
+  'http://127.0.0.1',
+  ...(process.env.WEB_APP_URL ? [process.env.WEB_APP_URL.replace(/\/$/, '')] : []),
+];
 function isAllowed(uri: string): boolean {
   return ALLOWED_PREFIXES.some((p) => uri.startsWith(p));
 }
