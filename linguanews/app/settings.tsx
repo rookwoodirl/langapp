@@ -6,6 +6,7 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
@@ -24,6 +25,21 @@ const THEME_OPTIONS: { mode: ThemeMode; label: string }[] = [
   { mode: 'dark', label: 'Dark' },
   { mode: 'system', label: 'System' },
 ];
+
+// react-native-web's Alert.alert is a no-op (it never shows buttons or calls onPress),
+// so destructive confirmations need a window.confirm fallback on web.
+function confirmDestructive(title: string, message: string, confirmLabel: string, onConfirm: () => void) {
+  if (Platform.OS === 'web') {
+    if (window.confirm(`${title}\n\n${message}`)) {
+      onConfirm();
+    }
+    return;
+  }
+  Alert.alert(title, message, [
+    { text: 'Cancel', style: 'cancel' },
+    { text: confirmLabel, style: 'destructive', onPress: onConfirm },
+  ]);
+}
 
 export default function SettingsScreen() {
   const [settings, setSettings] = useState<UserSettings>({
@@ -61,31 +77,31 @@ export default function SettingsScreen() {
   }
 
   function handleSignOut() {
-    Alert.alert('Sign out?', 'You will need to sign in again with Google.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign out',
-        style: 'destructive',
-        onPress: async () => {
-          await clearAuthState();
-          router.replace('/login');
-        },
-      },
-    ]);
+    confirmDestructive(
+      'Sign out?',
+      'You will need to sign in again with Google.',
+      'Sign out',
+      async () => {
+        await clearAuthState();
+        router.replace('/login');
+      }
+    );
   }
 
   function handleClearArticles() {
-    Alert.alert('Clear saved articles?', 'This cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Clear',
-        style: 'destructive',
-        onPress: async () => {
-          await clearSavedArticles();
+    confirmDestructive(
+      'Clear saved articles?',
+      'This cannot be undone.',
+      'Clear',
+      async () => {
+        await clearSavedArticles();
+        if (Platform.OS === 'web') {
+          window.alert('Saved articles cleared.');
+        } else {
           Alert.alert('Done', 'Saved articles cleared.');
-        },
-      },
-    ]);
+        }
+      }
+    );
   }
 
   return (
