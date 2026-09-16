@@ -14,6 +14,7 @@ import {
   useWindowDimensions,
   NativeSyntheticEvent,
   NativeScrollEvent,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
@@ -56,6 +57,27 @@ type VocabFilter =
 
 const SETTINGS_KEY = '@linguanews/settings';
 const CONFIRMED_DEVICE_PAIRS_KEY = '@linguanews/confirmed_device_pairs';
+
+// react-native-web's Alert.alert is a no-op (it never shows buttons or calls onPress),
+// so anything with an actionable button needs a window.confirm/alert fallback on web.
+function confirmAction(title: string, message: string, confirmLabel: string, onConfirm: () => void, destructive = false) {
+  if (Platform.OS === 'web') {
+    if (window.confirm(`${title}\n\n${message}`)) onConfirm();
+    return;
+  }
+  Alert.alert(title, message, [
+    { text: 'Cancel', style: 'cancel' },
+    { text: confirmLabel, style: destructive ? 'destructive' : undefined, onPress: onConfirm },
+  ]);
+}
+
+function notifyWeb(title: string, message?: string) {
+  if (Platform.OS === 'web') {
+    window.alert(message ? `${title}\n\n${message}` : title);
+    return;
+  }
+  Alert.alert(title, message);
+}
 
 const TABS = ['Translate', 'Articles', 'Vocab', 'Review', 'Cost'] as const;
 const COST_TIME_RANGES = [
@@ -394,17 +416,21 @@ export default function HomeScreen() {
   }
 
   async function handlePaste() {
-    const text = await Clipboard.getStringAsync();
-    if (text) {
-      setUrl(text.trim());
-    } else {
-      Alert.alert('Nothing to paste', 'Your clipboard is empty.');
+    try {
+      const text = await Clipboard.getStringAsync();
+      if (text) {
+        setUrl(text.trim());
+      } else {
+        Alert.alert('Nothing to paste', 'Your clipboard is empty.');
+      }
+    } catch {
+      Alert.alert('Paste unavailable', 'Your browser blocked clipboard access. You can type or paste the URL directly into the field instead.');
     }
   }
 
   async function handleTranslate() {
     if (!url.trim()) {
-      Alert.alert('Paste a URL first', 'Tap the Paste button to load a link from your clipboard.');
+      notifyWeb('Paste a URL first', 'Tap the Paste button to load a link from your clipboard.');
       return;
     }
     const src = pendingSourceRef.current;
@@ -414,24 +440,11 @@ export default function HomeScreen() {
     async function doTranslate() {
       await fetchArticle(url.trim(), true, settings, src);
       if (useArticleStore.getState().error) return;
-      Alert.alert(
+      confirmAction(
         'Translation started',
         'Your article is being translated sentence by sentence. It will appear in the Articles section as it comes in.',
-        [{ text: 'Go to Articles', onPress: () => { scrollToTab(1); loadSavedArticles(); } },
-         { text: 'OK', style: 'cancel' }],
-      );
-    }
-
-    async function confirmAndTranslate() {
-      Alert.alert(
-        'Translate article?',
-        usingLLM
-          ? 'This will send the article to Claude for translation. Estimated cost: max $1.'
-          : 'This will translate the article using a free on-device service.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Translate', onPress: doTranslate },
-        ],
+        'Go to Articles',
+        () => { scrollToTab(1); loadSavedArticles(); },
       );
     }
 
@@ -442,28 +455,23 @@ export default function HomeScreen() {
       if (!confirmed.includes(pairKey)) {
         const fromName = getLanguageName(settings.sourceLanguage);
         const toName = getLanguageName(settings.targetLanguage);
-        Alert.alert(
+        confirmAction(
           'Set up language pair?',
           `Enable on-device translation for ${fromName} → ${toName}? When you later move to native builds, a language pack (~30MB) will be downloaded here once per pair.`,
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Enable',
-              onPress: async () => {
-                await AsyncStorage.setItem(
-                  CONFIRMED_DEVICE_PAIRS_KEY,
-                  JSON.stringify([...confirmed, pairKey]),
-                );
-                confirmAndTranslate();
-              },
-            },
-          ],
+          'Enable',
+          async () => {
+            await AsyncStorage.setItem(
+              CONFIRMED_DEVICE_PAIRS_KEY,
+              JSON.stringify([...confirmed, pairKey]),
+            );
+            doTranslate();
+          },
         );
         return;
       }
     }
 
-    confirmAndTranslate();
+    doTranslate();
   }
 
   async function handleGenerateVocab(article: Article) {
@@ -553,17 +561,16 @@ export default function HomeScreen() {
   }
 
   async function handleDeleteArticle(article: Article) {
-    Alert.alert('Delete article?', 'This cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try { await deleteArticle(article.id); }
-          catch { Alert.alert('Error', 'Could not delete article.'); }
-        },
+    confirmAction(
+      'Delete article?',
+      'This cannot be undone.',
+      'Delete',
+      async () => {
+        try { await deleteArticle(article.id); }
+        catch { notifyWeb('Error', 'Could not delete article.'); }
       },
-    ]);
+      true,
+    );
   }
 
   function scrollToTab(index: number) {
@@ -593,21 +600,28 @@ export default function HomeScreen() {
       keyboardShouldPersistTaps="always"
       bounces={false}
     >
-      {/* Paste button */}
+      {/* Article URL */}
       <View style={styles.pasteCard}>
         <Text style={styles.cardLabel}>Article URL</Text>
-        {url ? (
-          <View style={styles.urlPreview}>
-            <Text style={styles.urlText} numberOfLines={2}>{url}</Text>
+        <View style={styles.urlInputRow}>
+          <TextInput
+            style={styles.urlInput}
+            value={url}
+            onChangeText={setUrl}
+            placeholder="Paste or type an article URL"
+            placeholderTextColor={colors.textFaint}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+          {url ? (
             <TouchableOpacity onPress={() => setUrl('')} hitSlop={8} style={styles.clearBtn}>
               <Text style={styles.clearText}>✕</Text>
             </TouchableOpacity>
-          </View>
-        ) : (
-          <Text style={styles.urlPlaceholder}>Tap Paste to load a link from your clipboard</Text>
-        )}
+          ) : null}
+        </View>
         <TouchableOpacity style={styles.pasteBtn} onPress={handlePaste} activeOpacity={0.8}>
-          <Text style={styles.pasteBtnText}>Paste</Text>
+          <Text style={styles.pasteBtnText}>Paste from clipboard</Text>
         </TouchableOpacity>
       </View>
 
@@ -1797,19 +1811,18 @@ const themedStyles = (colors: ThemeColors) => StyleSheet.create({
     letterSpacing: 0.8,
     marginBottom: 10,
   },
-  urlPreview: {
+  urlInputRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     backgroundColor: colors.accentSoft,
     borderRadius: 10,
     borderWidth: 1.5,
     borderColor: colors.accent,
-    padding: 12,
+    paddingHorizontal: 12,
     marginBottom: 12,
     gap: 8,
   },
-  urlText: { flex: 1, fontSize: 14, color: colors.text },
-  urlPlaceholder: { fontSize: 14, color: colors.textFaint, marginBottom: 12 },
+  urlInput: { flex: 1, fontSize: 14, color: colors.text, paddingVertical: 12 },
   clearBtn: { padding: 2 },
   clearText: { fontSize: 14, color: colors.textFaint },
   pasteBtn: {
