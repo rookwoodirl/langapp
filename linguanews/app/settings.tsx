@@ -44,10 +44,13 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     AsyncStorage.getItem(SETTINGS_KEY).then((raw) => {
-      if (raw) {
+      if (!raw) return;
+      try {
         const parsed = JSON.parse(raw);
         // Merge with defaults so new fields are present even for old stored settings
         setSettings((prev) => ({ ...prev, ...parsed }));
+      } catch {
+        // Corrupted settings — ignore and keep current in-memory settings
       }
     });
   }, []);

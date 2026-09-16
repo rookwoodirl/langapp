@@ -357,7 +357,12 @@ export default function HomeScreen() {
   useFocusEffect(
     React.useCallback(() => {
       AsyncStorage.getItem(SETTINGS_KEY).then((raw) => {
-        if (raw) setSettings((prev) => ({ ...prev, ...JSON.parse(raw) }));
+        if (!raw) return;
+        try {
+          setSettings((prev) => ({ ...prev, ...JSON.parse(raw) }));
+        } catch {
+          // Corrupted settings — ignore and keep current in-memory settings
+        }
       });
     }, []),
   );

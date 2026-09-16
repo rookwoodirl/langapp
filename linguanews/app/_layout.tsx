@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useThemeStore } from '../store/themeStore';
 import { useColors } from '../hooks/useColors';
 import { getAuthState } from '../services/auth';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 export default function RootLayout() {
   const { load } = useThemeStore();
@@ -29,7 +30,7 @@ export default function RootLayout() {
   }, [navState?.key, authChecked, isAuthed]);
 
   return (
-    <>
+    <ErrorBoundary>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
@@ -46,6 +47,6 @@ export default function RootLayout() {
         <Stack.Screen name="chat-setup" options={{ title: 'New Chat', presentation: 'modal' }} />
         <Stack.Screen name="chat/[id]" options={{ title: 'Chat' }} />
       </Stack>
-    </>
+    </ErrorBoundary>
   );
 }
