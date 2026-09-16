@@ -2,10 +2,10 @@
 
 ## What this is
 
-A language-learning app (React Native / Expo Go, targeting Android) that lets users paste a URL, translates it into a target language sentence-by-sentence as a background job, and builds a personal vocabulary list from that reading. The user can tap words while reading to look them up, or tap "Generate Vocab" to auto-extract key words. Each word gets a rich entry: definition, part of speech, gender/article (for nouns), and conjugation table (for verbs).
+A language-learning app (React Native / Expo, targeting Android, also exported as a static web build) that lets users paste a URL, translates it into a target language sentence-by-sentence as a background job, and builds a personal vocabulary list from that reading. The user can tap words while reading to look them up, or tap "Generate Vocab" to auto-extract key words. Each word gets a rich entry: definition, part of speech, gender/article (for nouns), and conjugation table (for verbs).
 
 The repo has two workspaces:
-- `linguanews/` — Expo React Native app (TypeScript)
+- `linguanews/` — Expo React Native app (TypeScript). Also builds to a static web bundle (`npm run build:web` → `expo export --platform web`) and deploys that as its own Railway service (`linguanews/railway.toml`, `serve dist`) — separate from the backend deployment.
 - `linguanews-backend/` — Express + PostgreSQL API server (TypeScript), deployed on Railway
 
 ## Critical rules
@@ -30,6 +30,7 @@ GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 JWT_SECRET=...
 BACKEND_URL=https://linguanews-backend-production.up.railway.app
+WEB_APP_URL=...               # deployed web build's URL; added to the OAuth redirect allowlist when set
 DATABASE_URL=...             # injected by Railway PostgreSQL plugin
 PORT=...                     # injected by Railway
 ```
@@ -40,19 +41,28 @@ PORT=...                     # injected by Railway
 
 ## Architecture overview
 
-### Translation flow (backend-driven streaming)
+### Translation flow
 
+There are two mutually-exclusive translation paths, selected by the `UserSettings.useLLM` toggle (a "LLM" / "Free" switch in the Translate tab of `app/index.tsx`; `useLLM !== false` means LLM mode). Both are driven from `articleStore.loadArticle()`.
+
+**LLM mode (backend-driven streaming, default):**
 1. User pastes a URL → mobile scrapes it (`POST /scrape`) → gets `{ title, textContent }`
 2. Mobile calls `POST /articles/translate` with `{ text, url, title, sourceLanguage, targetLanguage, nativeLanguage, difficulty }`
 3. Backend creates an article stub (`status: 'translating'`) and returns `{ id }` immediately
 4. Backend runs `runTranslationJob()` as a fire-and-forget async job:
-   - Calls Claude (`claude-sonnet-4-6`) with streaming enabled
+   - Calls Claude (`claude-sonnet-4-6`) with streaming enabled, chunking input at 40,000 chars (`CHUNK_SIZE` in `translationService.ts`)
    - First JSON line Claude emits: `{"title":"<article title in nativeLanguage>"}`
    - Subsequent lines: `{"original":"...","translation":"..."}`
    - Each parsed sentence is inserted into `article_text` as it arrives
    - On completion: updates `articles.status = 'complete'`, writes token counts, records to `api_costs`
 5. Mobile shows a "Translating…" alert, switches to Articles tab
 6. When user opens the article, the reader polls `GET /articles/:id/sentences?after=N` every 2 seconds, appending sentences until `status === 'complete'`
+7. If the article was truncated (legacy long-article path), `articleStore.continueTranslation()` calls `POST /articles/:id/continue`, which resumes translating `articles.remaining_text` server-side via Claude and streams more rows into `article_text`
+
+**Free mode (on-device, no LLM cost):**
+1. Same scrape step, but `articleStore.loadArticle()` calls `POST /articles` to create the article row directly (`apiCreateDeviceArticle()`), then translates client-side via `services/deviceTranslation.ts`, which calls the free MyMemory REST API (`api.mymemory.translated.net`) sentence-by-sentence
+2. Each translated sentence is appended locally and pushed to the backend with `POST /articles/:id/text` (`apiAppendDeviceSentences()`), which writes rows into `article_text` and marks `status = 'complete'` when done
+3. No `api_costs` row is written for this path — it never touches `callLLM()`
 
 Articles are automatically saved on the backend from the moment translation starts — there is no manual "Save" button.
 
@@ -60,12 +70,19 @@ Articles are automatically saved on the backend from the moment translation star
 
 ### Frontend (`linguanews/`)
 
-**Entry point:** `app/index.tsx` — horizontal ScrollView pager with tabs: Translate, Articles, Vocab, Review, Cost. Contains `handleGenerateVocab`, cost event display, conjugation modal, article/vocab CRUD, and notecard list management.
+**Entry point:** `app/index.tsx` — horizontal ScrollView pager with tabs: Translate, Articles, Vocab, Review, Cost (`TABS` const). "Review" and "Cost" are tab labels only — tapping them navigates to the `/review` modal rather than showing inline pager content. Contains `handleGenerateVocab`, cost event display, conjugation modal, article/vocab CRUD, and notecard list management.
 
 **Article reading:** `app/article/[id].tsx` — full-screen reader with ParagraphCard components. Polls for new sentences while `status === 'translating'`. Long-press or tap on a word triggers `lookupWord()`.
 
+**Other screens** (`app/_layout.tsx` stack, all gated behind auth except `login`):
+- `app/login.tsx` — shown when `getAuthState()` finds no token; root layout redirects here
+- `app/settings.tsx` — modal; language pair / native language / difficulty / LLM-vs-free toggle
+- `app/review.tsx` — modal; SRS review session (renders `ReviewCard.tsx`), optionally filtered by `language` or `listId` params
+- `app/chat-setup.tsx` — modal; configure a new chat session (article-discussion or vocab-drill mode) before creating it
+- `app/chat/[id].tsx` — chat conversation screen for an existing `ChatSession`
+
 **Stores (Zustand):**
-- `store/articleStore.ts` — `loadArticle()` kicks off backend translation job, `lookupWord()` (with in-memory cache) calls `apiLookupWord()`, `appendSentences()` for poll-driven updates, `continueTranslation()` for legacy articles with `remainingText`
+- `store/articleStore.ts` — `loadArticle()` branches on `settings.useLLM` to kick off either the backend LLM translation job or on-device translation (see [Translation flow](#translation-flow)), `lookupWord()` (with in-memory cache) calls `apiLookupWord()`, `appendSentences()` for poll-driven/device-streamed updates, `continueTranslation()` calls `POST /articles/:id/continue` to resume LLM translation for legacy articles with `remainingText`
 - `store/vocabStore.ts` — saved vocabulary, optimistic add then reload
 - `store/usageStore.ts` — session-level token usage tracking
 - `store/notecardStore.ts` — notecard lists
@@ -74,11 +91,14 @@ Articles are automatically saved on the backend from the moment translation star
 
 **Services:**
 - `services/llm.ts`, `services/translator.ts` — empty placeholders left over from the move off client-side Anthropic calls. Do not add code to them; see [Critical rules](#critical-rules).
+- `services/supabase.ts` — another empty placeholder; auth used to go through Supabase and now goes through the Railway backend's Google OAuth (`services/auth.ts`). Do not add code to it.
+- `services/deviceTranslation.ts` — the free/no-LLM translation path. `translateTextOnDevice()` / `translateArticleOnDevice()` call the free MyMemory REST API (no key required) sentence-by-sentence. Comment in the file flags this as a placeholder to eventually swap for ML Kit (Android) / Apple Translation (iOS) if the app moves off Expo.
+- `services/ankiExport.ts` — `exportNotecardsToAnki()` builds a tab-separated file from saved vocab (`buildAnkiTsv()`) and shares/downloads it (`expo-sharing` on native, a `Blob` download on web). Used from the Vocab tab in `app/index.tsx`.
 - `services/vocab.ts` — thin wrappers that just forward to `services/api.ts`:
   - `lookupWordDefinition(word, targetLang, nativeLanguage, articleContext?)` → `apiLookupWord()` → backend `POST /llm/lookup` (Wiktionary first server-side when `nativeLanguage === 'en'`, else Sonnet fallback). Returns `LookupResult`.
   - `selectVocabWords(text, targetLang, nativeLanguage, existingWords)` → `apiSelectVocabWords()` → backend `POST /llm/vocab-select` (Haiku). Defensive parsing handles the model sometimes returning `{"word":"..."}` objects.
   - `getVerbConjugation(verb, language)` → `apiGetVerbConjugation()` → backend `POST /llm/conjugate` (Haiku).
-- `services/api.ts` — all REST calls to backend, including the LLM-backed ones above and `apiSendChatMessage()` → `POST /chat/message`. Auth identity from `getAuthState()` (Google OAuth JWT stored in AsyncStorage).
+- `services/api.ts` — all REST calls to backend, including the LLM-backed ones above, `apiSendChatMessage()` → `POST /chat/message`, and the device-translation helpers `apiCreateDeviceArticle()` (`POST /articles`) / `apiAppendDeviceSentences()` (`POST /articles/:id/text`). Auth identity from `getAuthState()` (Google OAuth JWT stored in AsyncStorage). Note: `apiPatchArticle()` (`PATCH /articles/:id`) is defined but currently unused by any store.
 - `services/apiCosts.ts` — cost recording now happens server-side inside `callLLM()`; this file only keeps the `CostSource` type for compatibility.
 - `services/scraper.ts` — `scrapeArticle(url)` → `POST /scrape` → `{ title, textContent }`.
 - `services/auth.ts` — `getAuthState()`, `saveAuthState(token)`, `clearAuthState()`. Token stored in AsyncStorage as `@linguanews/auth`.
@@ -89,7 +109,7 @@ Articles are automatically saved on the backend from the moment translation star
 - `SentencePair` — `{ original, translation }`
 - `VocabWord` — word in an article's vocab list: `word`, `definition`, `partOfSpeech?`, `gender?`, `article?`, `infinitive?`
 - `UserVocabWord` — saved vocab entry: adds `id`, `vocabWordId`, `language`, `conjugation?`, SRS fields (`dueAt`, `intervalDays`, `easeFactor`, `repetitions`)
-- `UserSettings` — `sourceLanguage`, `targetLanguage`, `nativeLanguage`, `difficulty`
+- `UserSettings` — `sourceLanguage`, `targetLanguage`, `nativeLanguage`, `difficulty`, `useLLM?` (false selects the free on-device translation path, see [Translation flow](#translation-flow))
 - `VerbConjugation` — `{ infinitive, tenses: VerbTense[] }` (has legacy `present?` for backward compat)
 - `CostSource` (in `apiCosts.ts`) — `'article' | 'article-regeneration' | 'vocab' | 'vocab_selection' | 'audio'`
 
@@ -125,8 +145,10 @@ Express server (`src/index.ts`). Runs idempotent migrations on startup (`CREATE 
 - `GET /articles/:id/sentences?after=N&user_id=` — polling endpoint; returns `{ sentences, status, total }`
 - `GET /articles?user_id=` — list user's articles (joins `article_text` for preview when JSONB is empty)
 - `GET /articles/:id?user_id=` — get single article (joins `article_text`, prefers it over legacy JSONB)
-- `POST /articles` — legacy: save a fully-translated article (used by old client flow / `continueTranslation`)
-- `PATCH /articles/:id` — append sentence pairs (used by legacy `continueTranslation`)
+- `POST /articles` — create an article row directly (no Claude call); used by the on-device (`useLLM: false`) translation path to create the stub before streaming sentences in via `POST /articles/:id/text`
+- `POST /articles/:id/text` — append `{ original, translated }` sentence rows into `article_text` for an article, optionally marking it `complete`; used by the on-device translation path
+- `POST /articles/:id/continue` — resume LLM translation of a legacy article's `remaining_text`, streaming more rows into `article_text` via `runContinuationJob()`
+- `PATCH /articles/:id` — append sentence pairs to the legacy JSONB columns (`original_sentences`/`translated_sentences`); a client wrapper (`apiPatchArticle()`) exists but is currently unused
 - `DELETE /articles?user_id=` — soft-delete all articles
 - `DELETE /articles/:id?user_id=` — soft-delete one article
 - `POST /vocab` — upsert vocab word, link to user
@@ -143,8 +165,8 @@ Express server (`src/index.ts`). Runs idempotent migrations on startup (`CREATE 
 - `GET /auth/google` — start Google OAuth flow
 - `GET /auth/google/callback` — exchange code, mint JWT, redirect to app
 - `GET /notecards/due` — SRS due cards
-- `POST /notecards/:id/review` — submit SRS review grade
-- `GET /notecards/lists`, `POST /notecards/lists`, etc. — notecard list CRUD
+- `POST /notecards/:userVocabId/review` — submit SRS review grade
+- `GET /notecards/lists`, `POST /notecards/lists`, `PUT /notecards/lists/:listId`, `DELETE /notecards/lists/:listId`, `GET/POST/DELETE /notecards/lists/:listId/items` — notecard list CRUD
 
 **DB tables:**
 - `articles` — UUID PK, `user_id`, `url`, `title`, `source_language`, `target_language`, `original_sentences JSONB` (legacy), `translated_sentences JSONB` (legacy), `vocab JSONB`, `input_tokens`, `output_tokens`, `deleted`, `remaining_text`, `status TEXT DEFAULT 'complete'`, `status_message`
@@ -170,7 +192,7 @@ Express server (`src/index.ts`). Runs idempotent migrations on startup (`CREATE 
 
 **Auth (`src/routes/auth.ts`):**
 - Google OAuth 2.0 — `GET /auth/google` → Google → `GET /auth/google/callback` → mint JWT → redirect to app
-- Redirect URI allowlist: `exp://` (Expo Go) and `linguanews://` (native build)
+- Redirect URI allowlist (`ALLOWED_PREFIXES`): `exp://` (Expo Go), `linguanews://` (native build), `http://localhost` / `http://127.0.0.1` (local web dev), plus `WEB_APP_URL` if set (the deployed web build's own Railway URL)
 - JWTs contain `{ userId, email, name }`, expire in 365 days, signed with `JWT_SECRET`
 
 ---
@@ -197,11 +219,16 @@ All model calls happen server-side (`linguanews-backend/src/llmService.ts` → `
 - `components/ParagraphCard.tsx` — renders a sentence pair; supports word tap on both original and translation sides
 - `components/ArticleText.tsx` — wraps text with long-press detection
 - `components/LanguagePicker.tsx` — source/target/native language selector
+- `components/AudioPlayer.tsx` — TTS playback controls for an article (wraps `services/tts.ts`)
+- `components/ReviewCard.tsx` — single SRS review card (front/back flip, grade buttons), used by `app/review.tsx`
+- `components/WheelPicker.tsx` — scrollable wheel-style picker, used for settings selectors in `app/index.tsx`
 
 ## Utils / Constants
 
 - `utils/cost.ts` — `calcCost()`, `calcCostHaiku()`, `formatCost()`, `formatTokens()`
+- `utils/chunks.ts` — `pairChunks()`; re-pairs translated/original text into `SentencePair[]` by chunking to matching sizes
 - `constants/languages.ts` — `DEFAULT_SOURCE_LANGUAGE`, `DEFAULT_TARGET_LANGUAGE`, `DEFAULT_NATIVE_LANGUAGE`, language list, `isGenderedLanguage()`
 - `constants/costs.ts` — `SOURCE_ORDER`, `SOURCE_LABELS`
 - `constants/theme.ts` — `ThemeColors` interface
 - `hooks/useColors.ts` — resolves current theme colors
+- `hooks/useArticle.ts` — thin wrapper around `articleStore` exposing `fetchArticle()` (calls `loadArticle()`), `isLoading`, `loadingStep`, `error`, `currentArticle`; used by `app/index.tsx`
